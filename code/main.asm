@@ -10,7 +10,42 @@
 ; PRE-PROCESSED CONSTANTS
 ;==========================================================
 
-; Zero page addresses
+; IMPORTANT!!! don't forget to use # before using the constants,
+;         or they will be probably treated as zero page addresses
+
+CN_SCR_MEM_START_LOW    = $00
+CN_SCR_MEM_START_HIGH   = $04
+CN_SCR_MEM_END_LOW      = $E8
+CN_SCR_MEM_END_HIGH     = $07
+
+CN_COL_MEM_START_LOW    = $00
+CN_COL_MEM_START_HIGH   = $D8
+CN_COL_MEM_END_LOW      = $E8
+CN_COL_MEM_END_HIGH     = $DB
+
+CN_CHAR_SPACE           = $20
+
+CN_COL_VAL_BLACK        = $00
+CN_COL_VAL_WHITE        = $01
+CN_COL_VAL_RED          = $02
+CN_COL_VAL_CYAN         = $03
+CN_COL_VAL_PURPLE       = $04
+CN_COL_VAL_GREEN        = $05
+CN_COL_VAL_BLUE         = $06
+CN_COL_VAL_YELLOW       = $07
+CN_COL_VAL_ORANGE       = $08
+CN_COL_VAL_BROWN        = $09
+CN_COL_VAL_L_RED        = $0A
+CN_COL_VAL_D_GREY       = $0B
+CN_COL_VAL_M_GREY       = $0C
+CN_COL_VAL_L_GREEN      = $0D
+CN_COL_VAL_L_BLUE       = $0E
+CN_COL_VAL_L_GREY       = $0F
+
+
+;==========================================================
+; ZERO PAGE MAP
+;==========================================================
 
 ; (x, y) screen position plotting
 Z_SCR_X           = $02
@@ -21,27 +56,31 @@ Z_COL_LOW_BYTE    = $06
 Z_COL_HI_BYTE     = $07
 Z_OFFSET          = $08
 
-; temporary storage
-Z_TEMP_1_LOW      = $10
-Z_TEMP_1_HIGH     = $11
+; general purpose low/high address pairs
+Z_ADDR_1_LOW      = $10
+Z_ADDR_1_HIGH     = $11
+Z_ADDR_2_LOW      = $12
+Z_ADDR_2_HIGH     = $13
+Z_ADDR_3_LOW      = $14
+Z_ADDR_3_HIGH     = $15
+Z_ADDR_4_LOW      = $16
+Z_ADDR_4_HIGH     = $17
 
-Z_TEMP_2_LOW      = $12
-Z_TEMP_2_HIGH     = $13
-
-Z_TEMP_3_LOW      = $14
-Z_TEMP_3_HIGH     = $15
-
-Z_TEMP_1_MISC     = $16
-Z_TEMP_2_MISC     = $17
-Z_TEMP_3_MISC     = $18
+Z_TEMP_1          = $18
+Z_TEMP_2          = $19
+Z_TEMP_3          = $1A
 
 ; working vars for specific routines
-; - in general this is needed because these routines are called by other routines
 Z_PSH_REG_TEMP          = $20     ; push all registers temp storage
 Z_BYTE_MATCH_LOW        = $21
 Z_BYTE_MATCH_HIGH       = $22
 Z_BYTE_MATCH_BYTE       = $23
 Z_BYTE_MATCH_LIST_SIZE  = $24
+
+; user data
+Z_USR_POS_X             = $40 ;$07
+Z_USR_POS_Y             = $41 ;$20
+Z_USR_FACING            = $42 ;$00   ;(0,1,2,3) -> (up,right,left,down)
 
 
 ;==========================================================
@@ -71,11 +110,14 @@ Z_BYTE_MATCH_LIST_SIZE  = $24
 * = $1000
 
 start_screen
-  jsr clear_screen
   jsr set_screen_bg_cols
+  ;lda #CN_CHAR_SPACE
+  ;jsr fill_screen_chars
+  lda #CN_COL_VAL_D_GREY
+  jsr fill_screen_cols
 start_map
-  ldx #$60 ;>screen_map
-  jsr copy_map_to_screen
+  ldx #>screen_map
+  jsr copy_map_chars_to_screen
   jmp *
 
 ; --- OLD
@@ -130,35 +172,79 @@ infinite_loop
 ; ROUTINES
 ;==========================================================
 
-; === clear_screen
-;   clears (puts a SPACE character) at all locations of default screen memory
+; === fill_screen_chars
+;   fill entire screen with single character
 ; params:
-;   none
+;   A - character to fill screen with
+; uses:
+;   A, X
+; side effects:
+;   fill_mem routine called uses A, X, Z_ADDR_1 L/H, Z_ADDR_2 L/H
+fill_screen_chars
+  ldx #CN_SCR_MEM_START_LOW       ; set start / end addres in low / high for fill_mem call
+  stx Z_ADDR_1_LOW
+  ldx #CN_SCR_MEM_START_HIGH
+  stx Z_ADDR_1_HIGH
+  ldx #CN_SCR_MEM_END_LOW
+  stx Z_ADDR_2_LOW
+  ldx #CN_SCR_MEM_END_HIGH
+  stx Z_ADDR_2_HIGH
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
+  rts
+
+; === fill_screen_cols
+;   fill entire colour map with single colour
+; params:
+;   A - colour to fill colour map with
+; uses:
+;   A, X
+; side effects:
+;   fill_mem routine called uses A, X, Z_ADDR_1 L/H, Z_ADDR_2 L/H
+fill_screen_cols
+  ldx #CN_COL_MEM_START_LOW       ; set start / end addres in low / high for fill_mem call
+  stx Z_ADDR_1_LOW
+  ldx #CN_COL_MEM_START_HIGH
+  stx Z_ADDR_1_HIGH
+  ldx #CN_COL_MEM_END_LOW
+  stx Z_ADDR_2_LOW
+  ldx #CN_COL_MEM_END_HIGH
+  stx Z_ADDR_2_HIGH
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
+  rts
+
+
+; === fill_mem
+;   fill memory range with a single byte
+; params:
+;   Z_ADDR_1_HIGH / LOW - from memory location
+;   Z_ADDR_2_HIGH / LOW - to memory location
+;   A - byte to fill
 ; uses:
 ;   X, Y, A
 ; side effects:
 ;   carry flag not restored (TODO)
-clear_screen
-  lda #$00                  ; put address $0400 (start of screen chars) at zero page temp addr Z_TEMP_1_LOW / HIGH
-  tay                       ; - save #$00 to Y for later
-  sta Z_TEMP_1_HIGH
-  lda #$04
-  sta Z_TEMP_1_LOW
-  lda #$E8                  ; put high byte of address $07E8 (end of screen chars + 1) at zero page $16
-  sta Z_TEMP_1_MISC
-  ldx #$08                  ; load low byte of address $07E8 to X
-  lda #$20                  ; put screen char SPACE in A
-clear_screen_loop_1
-  sta (Z_TEMP_1_HIGH), Y    ; (Z_TEMP_1_LOW/HIGH) + Y <- #$00
-  iny
-  bne clear_screen_skip_1
-  inc Z_TEMP_1_LOW
-  jmp clear_screen_loop_1
-clear_screen_skip_1
-  cpx Z_TEMP_1_LOW          ; check low byte of address $07E8 (end of screen chars + 1) against current addr low byte (zero page)
-  bne clear_screen_loop_1
-  cpy Z_TEMP_1_MISC         ; check high byte of address $07E8 (end of screen chars + 1) against current addr high byte (in Y)
-  bne clear_screen_loop_1
+fill_mem
+  ldy #$00                  ; zero Y register
+  tax                       ; keep copy of byte in X
+fill_mem_loop
+  txa
+  sta (Z_ADDR_1_LOW), Y
+  inc Z_ADDR_1_LOW
+  lda Z_ADDR_1_LOW
+  bne fill_mem_check_high
+fill_mem_paged
+  inc Z_ADDR_1_HIGH
+fill_mem_check_high
+  lda Z_ADDR_1_HIGH
+  cmp Z_ADDR_2_HIGH
+  beq fill_mem_check_low
+  jmp fill_mem_loop
+fill_mem_check_low
+  lda Z_ADDR_1_LOW
+  cmp Z_ADDR_2_LOW
+  beq fill_mem_finish
+  jmp fill_mem_loop
+fill_mem_finish
   rts
 
 
@@ -225,7 +311,7 @@ set_last_xy_return
   rts
 
 
-; === copy_map_to_screen
+; === copy_visible_map_to_screen
 ;   special map copy routine from stored memory location to screen, with coded colouring.
 ;   colours maze as dark gray, blocks as white, and block edges as light grey.
 ; params:
@@ -236,59 +322,102 @@ set_last_xy_return
 ;   A, X, Y have random value after this routine
 ; returns:
 ;   none
-copy_map_to_screen
-  stx Z_TEMP_3_HIGH                     ; X -> Z_TEMP_3_HIGH, input for page where map data exists
+copy_visible_map_to_screen
+  stx Z_ADDR_3_HIGH                     ; X -> Z_ADDR_3_HIGH, input for page where map data exists
   lda #$04
-  sta Z_TEMP_1_HIGH                     ; put high part of address $0400 (screen chars) zero temp 1 addr
+  sta Z_ADDR_1_HIGH                     ; put high part of address $0400 (screen chars) zero temp 1 addr
   lda #$D8
-  sta Z_TEMP_2_HIGH                     ; put high part of address $D800 (col map) zero temp 2 addr
+  sta Z_ADDR_2_HIGH                     ; put high part of address $D800 (col map) zero temp 2 addr
   lda #$00                              ; zero out low part of temp 1, 2, 3 and save to Y (for indirect mem access)
-  sta Z_TEMP_1_LOW
-  sta Z_TEMP_2_LOW
-  sta Z_TEMP_3_LOW
+  sta Z_ADDR_1_LOW
+  sta Z_ADDR_2_LOW
+  sta Z_ADDR_3_LOW
   tay
   lda #$03                              ; put page count for reaching end of screen block (1000 bytes) in temp 1 misc, low value E8 hardcoded below
-  sta Z_TEMP_1_MISC
-copy_mp2scr_loop
-  lda (Z_TEMP_3_LOW), Y                 ; load next character from memory
-  sta (Z_TEMP_1_LOW), Y                 ; store in character mem
+  sta Z_TEMP_1
+copy_vm2scr_loop
+  lda (Z_ADDR_3_LOW), Y                 ; load next character from memory
+  sta (Z_ADDR_1_LOW), Y                 ; store in character mem
   ; match byte to map list, check for colouring
-  sty Z_TEMP_2_MISC                     ; save Y in temp storage
-  sta Z_TEMP_3_MISC                     ; save A in temp storage
+  sty Z_TEMP_2                     ; save Y in temp storage
+  sta Z_TEMP_3                     ; save A in temp storage
   ldx #<list_of_map_chars                ; X <- low byte addr of list
   ldy #>list_of_map_chars                ; Y <- high byte addr of list
   jsr match_byte_from_list
   cmp #$FF                              ; compare with not found code $FF
-  beq copy_mp2scr_non_map_char
-copy_mp2scr_is_map_char
+  beq copy_vm2scr_non_map_char
+copy_vm2scr_is_map_char
   lda #$0B                              ; set colour to grey
-  jmp copy_mp2scr_set_col
-copy_mp2scr_non_map_char
-  lda Z_TEMP_3_MISC                     ; get A (character) from temp storage
+  jmp copy_vm2scr_set_col
+copy_vm2scr_non_map_char
+  lda Z_TEMP_3                     ; get A (character) from temp storage
   cmp #$A0                              ; check if is full block (only used for centre)
-  beq copy_mp2scr_block_char
+  beq copy_vm2scr_block_char
   lda #$0F                              ; set colour to light gray
-  jmp copy_mp2scr_set_col
-copy_mp2scr_block_char
+  jmp copy_vm2scr_set_col
+copy_vm2scr_block_char
   lda #$01                              ; set colour to white
-copy_mp2scr_set_col
-  ldy Z_TEMP_2_MISC                     ; restore Y from temp storage
-  sta (Z_TEMP_2_LOW), Y                 ; store col in col mem
+copy_vm2scr_set_col
+  ldy Z_TEMP_2                     ; restore Y from temp storage
+  sta (Z_ADDR_2_LOW), Y                 ; store col in col mem
+copy_vm2scr_next_pos
+  iny                                   ; increase Y offset, affects all pointers
+  cpy #$00
+  beq copy_vm2scr_next_page             ; check if byte wrapped around to #$00, if so add page
+  lda Z_TEMP_1                     ; load page counter to check if should check low byte amount
+  cmp #$00
+  bne copy_vm2scr_loop                  ; if didn't load zero then continue looping, only check low byte if no more pages left
+  cpy #$E8                              ; check Y offset pointer against last position
+  bne copy_vm2scr_loop                  ; if not equal, not finished yet, continue looping
+  jmp copy_vm2scr_finish                ; otherwise we're done, finish
+copy_vm2scr_next_page
+  inc Z_ADDR_1_HIGH                     ; increase page for all pointers
+  inc Z_ADDR_2_HIGH
+  inc Z_ADDR_3_HIGH
+  dec Z_TEMP_1                     ; decrease page counter by 1
+  jmp copy_vm2scr_loop                  ; continue, end is not exactly on a page
+copy_vm2scr_finish
+  rts
+
+
+; === copy_map_chars_to_screen
+;   map copy routine from stored memory location to screen, characters only, does not set any colour map data
+; params:
+;   X - page where map starts, i.e. the high byte, assumes starts at zero starting offset
+; uses:
+;   A, X, Y
+; side effects:
+;   A, X, Y have random value after this routine
+; returns:
+;   none
+copy_map_chars_to_screen
+  stx Z_ADDR_3_HIGH                     ; X -> Z_ADDR_3_HIGH, input for page where map data exists
+  lda #$04
+  sta Z_ADDR_1_HIGH                     ; put high part of address $0400 (screen chars) zero temp 1 addr
+  lda #$D8
+  lda #$00                              ; zero out low part of temp 1, 2, 3 and save to Y (for indirect mem access)
+  sta Z_ADDR_1_LOW
+  sta Z_ADDR_3_LOW
+  tay
+  lda #$03                              ; put page count for reaching end of screen block (1000 bytes) in temp 1 misc, low value E8 hardcoded below
+  sta Z_TEMP_1
+copy_mp2scr_loop
+  lda (Z_ADDR_3_LOW), Y                 ; load next character from memory
+  sta (Z_ADDR_1_LOW), Y                 ; store in character mem
 copy_mp2scr_next_pos
   iny                                   ; increase Y offset, affects all pointers
   cpy #$00
   beq copy_mp2scr_next_page             ; check if byte wrapped around to #$00, if so add page
-  lda Z_TEMP_1_MISC                     ; load page counter to check if should check low byte amount
+  lda Z_TEMP_1                          ; load page counter to check if should check low byte amount
   cmp #$00
   bne copy_mp2scr_loop                  ; if didn't load zero then continue looping, only check low byte if no more pages left
   cpy #$E8                              ; check Y offset pointer against last position
   bne copy_mp2scr_loop                  ; if not equal, not finished yet, continue looping
   jmp copy_mp2scr_finish                ; otherwise we're done, finish
 copy_mp2scr_next_page
-  inc Z_TEMP_1_HIGH                     ; increase page for all pointers
-  inc Z_TEMP_2_HIGH
-  inc Z_TEMP_3_HIGH
-  dec Z_TEMP_1_MISC                     ; decrease page counter by 1
+  inc Z_ADDR_1_HIGH                     ; increase page for all pointers
+  inc Z_ADDR_3_HIGH
+  dec Z_TEMP_1                          ; decrease page counter by 1
   jmp copy_mp2scr_loop                  ; continue, end is not exactly on a page
 copy_mp2scr_finish
   rts
