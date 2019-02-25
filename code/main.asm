@@ -5,6 +5,11 @@
 ;
 ;==========================================================
 
+;==========================================================
+; SYSTEM AND KERNAL ROUTINES 
+;==========================================================
+
+FN_GETIN        = $FFE4     ; get character from buffer (keyboard buffer unless changed)
 
 ;==========================================================
 ; PRE-PROCESSED CONSTANTS
@@ -91,6 +96,8 @@ Z_PLYR_POS_Y            = $41
 Z_PLYR_FACING           = $42
 ; - helper
 Z_PLYR_LOC_TYPE         = $43
+Z_PLYR_LOC_TY_ADDR_LOW  = $44
+Z_PLYR_LOC_TY_ADDR_HIGH = $45
 
 
 ;==========================================================
@@ -134,6 +141,8 @@ start_player_data
   sta Z_PLYR_POS_Y
   lda #$00                  ; player facing direction = UP (0)
   sta Z_PLYR_FACING
+update_player_pos_type
+  jsr determine_location_type
 show_player_loc
   ; player location shown by making col map at player pos white
   lda Z_PLYR_POS_X
@@ -146,54 +155,28 @@ show_player_loc
   sta (Z_COL_LOW_BYTE), Y
 show_player_facing_str
   jsr write_player_facing_str
-infinite_loop
-  jmp *
-
-; --- OLD
-  ldy #$00                  ; zero Y, used in zero page indirect ($z),Y mem access below
-  lda #$00                  ; zero x and y zero page coordinate storage
+game_loop_move
+  jsr wait_for_key                      ; wait for a key from user
+  ldx #<data_key_codes_to_facing_dir    ; set up LOW / HIGH addr of key to facing direction mapping
+  ldy #>data_key_codes_to_facing_dir
+  jsr match_byte_from_list              ; try to match key to facing direction
+  cmp #$FF                              ; check if match failed
+  beq game_loop_move                    ; no match, continue getting key : TODO show bad input message
+  pha                                   ; save A, direction to face
+  lda Z_PLYR_POS_X                      ; set player (x,y) to screen (x,y)
   sta Z_SCR_X
+  lda Z_PLYR_POS_Y
   sta Z_SCR_Y
-  lda #$53                  ; store heart character code in A
-  ldx #$02                  ; store RED colour value in X
-test_plot_set_xy                 ; (x,y) at (0,0)
-  jsr plot_set_xy                ; (x,y) -> (high,low) for both screen and color map
-  sta (Z_SCR_LOW_BYTE), Y   ; write character to screen
-  pha                       ; push A to stack
-  txa                       ; X -> A, (for colour)
-  sta (Z_COL_LOW_BYTE), Y   ; write colour to map
-  pla                       ; restore A from stack
-test_plot_set_xy_2
-  inc Z_SCR_Y               ; increase y coord by 1, not at (0,1)
-  jsr plot_set_xy
-  sta (Z_SCR_LOW_BYTE), Y
-  inx                       ; X++, use next colour (CYAN)
-  pha
-  txa
-  sta (Z_COL_LOW_BYTE), Y
-  pla
-test_plot_set_xy_offset_only
-  iny                       ; increase Y by 1, which is not the y plot position but the offset used in mem access, i.e. is (x + 1), i.e. (1,1)
-  sta (Z_SCR_LOW_BYTE), Y
-  inx                       ; X++, use next colour (PURPLE) not actaully used
-  inx                       ; X++, use next colour (GREEN)
-  pha
-  txa
-  sta (Z_COL_LOW_BYTE), Y
-  pla
-test_plot_set_xy_3
-  inc Z_SCR_X               ; increase x coord by 1
-  inc Z_SCR_Y               ; increase y coord by 1
-  ldy #$00                  ; reset offset
-  jsr plot_set_xy                ; (x,y) now at (1,2)
-  sta (Z_SCR_LOW_BYTE), Y
-  inx                       ; X++, use next colour (BLUE)
-  pha
-  txa
-  sta (Z_COL_LOW_BYTE), Y
-  ;pla
-
-infinite_loop_old
+  jsr plot_set_xy                       ; update plot variables with (x,y)
+  lda #CN_COL_VAL_M_GREY                ; set A to medium grey
+  ldy #$00                              ; zero Y for indirect addr
+  sta (Z_COL_LOW_BYTE), Y               ; store A (med grey) in col map (at loc x,y)
+  pla                                   ; restore A, has direction to face
+  jsr move_player_in_dir                ; try to move player in direction specified
+  cmp #$FF                              ; check if move failed
+  beq show_player_loc                   ; move did fail, redraw current position as latest position
+  jmp update_player_pos_type            ; otherwise update from new move position, new draw and pass to main loop
+infinite_loop
   jmp *
 
 
@@ -203,6 +186,81 @@ infinite_loop_old
 
 ; these routines perform some common game particular function,
 ; mostly using lower level functions
+
+
+; === move_player_in_dir
+;   try to move a player in direction given current position
+; assumptions:
+;   - A input is number between $00 and $03 inclusive
+;   - player location already determined
+;   - data_facing_matrix does not cross page boundary
+; params:
+;   A - direction to move: (0, 1, 2, 3) -> (Up, right, left, down)
+; uses:
+;   A, Y
+;   Z_TEMP_1, Z_TEMP_2
+;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH
+;   Z_ADDR_1_LOW / HIGH
+;   all player core variables
+; side effects:
+; returns:
+;   A - new player direction if successful, or $FF if failed to move
+;   player core pos will be updated if successful
+;   player facing direction will be updated if successful
+move_player_in_dir
+  sta Z_TEMP_1                      ; store direction to try to move to face in temp storage
+  clc                               ; clear carry flag to prepare for addition
+  adc #$04                          ; add $04, set offset to facing direction part of location type row bytes
+  tay                               ; A -> Y for indirect addressing offset
+  lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get facing direction byte code ($00 = can move, $FF = can't move)
+  cmp #$FF                          ; check if can't move
+  beq mv_plyr_in_dir_failed         ; if can't move, finish already (fail code already in A)
+  lda #>data_facing_matrix          ; put high byte (page) of matrix facing table in temp addr 1 storage high
+  sta Z_ADDR_1_HIGH
+  lda #<data_facing_matrix          ; get low byte of matrix facing table to A, will move through rows to get for current facing dir
+  ldx Z_PLYR_FACING                 ; read current direction facing from temp var to X
+mv_plyr_in_dir_facing_loop
+  beq mv_plyr_in_dir_facing_read    ; when X == 0, go to read position
+  clc                               ; clear carry flag before addition
+  adc #$04                          ; add row length of data_facing_matrix
+  dex
+  jmp mv_plyr_in_dir_facing_loop
+mv_plyr_in_dir_facing_read
+  sta Z_ADDR_1_LOW                  ; save low byte addr, is row start in data_facing_matrix
+  ldy Z_TEMP_1                      ; read dir to move to Y, used as offset to read the right position
+  lda (Z_ADDR_1_LOW), Y             ; get new direction to face
+  sta Z_PLYR_FACING                 ; store direction to face
+  ; move player x
+  lda #>data_x_movement_facing_dir  ; put high byte (page) of data x movement for new direction in addr 1
+  sta Z_ADDR_1_HIGH
+  lda #<data_x_movement_facing_dir  ; same for low byte
+  sta Z_ADDR_1_LOW
+  ldy Z_PLYR_FACING                 ; load new (and now current) player facing direction to Y for offset
+  lda (Z_ADDR_1_LOW), Y             ; get amount to move in x direction
+  sta Z_TEMP_2                      ; temp store 2 amount
+  dec Z_PLYR_POS_X                  ; amount needs to be offset by -1 by dec cur value, not using negative numbers
+  lda Z_PLYR_POS_X                  ; get position
+  clc                               ; clear carry flag before addition
+  adc Z_TEMP_2                      ; add amount to move x position to x position
+  sta Z_PLYR_POS_X                  ; store updated position back in player pos x
+  ; move player y
+  lda #>data_y_movement_facing_dir  ; put high byte (page) of data y movement for new direction in addr 1
+  sta Z_ADDR_1_HIGH
+  lda #<data_y_movement_facing_dir  ; same for low byte
+  sta Z_ADDR_1_LOW
+  lda (Z_ADDR_1_LOW), Y             ; get amount to move in x direction (Y is still correct from x position update)
+  sta Z_TEMP_2                      ; temp store 2 amount
+  dec Z_PLYR_POS_Y                  ; amount needs to be offset by -1 by dec cur value, not using negative numbers
+  lda Z_PLYR_POS_Y                  ; get position
+  clc                               ; clear carry flag before addition
+  adc Z_TEMP_2                      ; add amount to move x position to x position
+  sta Z_PLYR_POS_Y                  ; store updated position back in player pos x
+  lda Z_PLYR_FACING                 ; put updated / current player facing direction in A, is indication of success on return
+  jmp mv_plyr_in_dir_finish
+mv_plyr_in_dir_failed
+  lda Z_TEMP_1
+mv_plyr_in_dir_finish
+  rts
 
 ; === write_player_facing_str
 ;   write player facing string at first line (CN_XY_MAP_STR_LINE_1_X / Y) of map write space
@@ -223,19 +281,19 @@ write_player_facing_str
   cmp #$00                          ; check if north
   beq show_pl_facing_str_n          ; if so, jump to north
   cmp #$01
-  beq show_pl_facing_str_w
-  cmp #$02
   beq show_pl_facing_str_e
+  cmp #$02
+  beq show_pl_facing_str_w
   lda #<data_str_pg1_facing_south   ; otherwise, pass through last condition, is south (facing == $03), load string low bytes
   jmp show_pl_facing_str_finish
 show_pl_facing_str_n
   lda #<data_str_pg1_facing_north   ; get low bytes for facing north string
   jmp show_pl_facing_str_finish
-show_pl_facing_str_w
-  lda #<data_str_pg1_facing_west    ; get low bytes for facing north string
-  jmp show_pl_facing_str_finish
 show_pl_facing_str_e
   lda #<data_str_pg1_facing_east    ; get low bytes for facing north string
+  jmp show_pl_facing_str_finish
+show_pl_facing_str_w
+  lda #<data_str_pg1_facing_west    ; get low bytes for facing north string
   jmp show_pl_facing_str_finish
 show_pl_facing_str_finish
   sta Z_ADDR_1_LOW                  ; store low byte for string
@@ -266,7 +324,7 @@ show_pl_facing_str_finish
 ;   none
 ; returns:
 ;   X and Z_PLYR_LOC_TYPE - row of location, or $FF if error
-;   Z_ADDR_1_LOW / HIGH pointing at row start, or last row if error
+;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH pointing at row start, or last row if error
 ;   plot_xy:    A, X, Y, c, plot variables
 determine_location_type
   ; first get character at player location
@@ -275,27 +333,36 @@ determine_location_type
   lda Z_PLYR_POS_Y                  ; store player pos y in plot y
   sta Z_SCR_Y
   jsr plot_set_xy                   ; move to player pos
+  ldy #$00                          ; zero Y, for indirect mem access
   lda (Z_SCR_LOW_BYTE), Y           ; get character at player post on map
   sta Z_TEMP_1                      ; store char in temp storage 1
   ; set up table scanning method
   lda #>data_front_facing_info      ; load high byte (page) of front facing info table
-  sta Z_ADDR_1_HIGH                 ; store in general purpose addr 1 high byte zero page storage
+  sta Z_PLYR_LOC_TY_ADDR_HIGH       ; store in high byte of player location type addr
   lda #<data_front_facing_info      ; load low byte of table
-  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  sta Z_PLYR_LOC_TY_ADDR_LOW        ; store in low byte of player location type addr
   ldx #$00                          ; zero X, will be used to count row
   ldy Z_PLYR_FACING
 det_loc_type_loop
-  lda (Z_ADDR_1_LOW), Y             ; get character for this facing direction (Y) and row (addr 1)
+  lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get character for this facing direction (Y) and row (with addr)
   cmp Z_TEMP_1
   beq det_loc_type_finish           ; found, finish
   inx                               ; otherwise X++, row to next row
-  cmp #$07                          ; check if row is on 8th row, i.e. gone past end
+  cpx #$07                          ; check if row is on 8th row, i.e. gone past end
   beq det_loc_type_row_err          ; if so, go to error state, exit
-  lda Z_ADDR_1_LOW                  ; get low byte of current addr 1 ptr
+  lda Z_PLYR_LOC_TY_ADDR_LOW        ; get low byte of current addr 1 ptr
+  clc                               ; clear carry flag before addition
   adc #$08                          ; add 8 to low byte count, i.e. next row (assumes does not cross page)
+  sta Z_PLYR_LOC_TY_ADDR_LOW        ; store updated low byte address
   jmp det_loc_type_loop
 det_loc_type_row_err
   ldx #$FF                          ; set row to error code
+  ; TODO : remove this error handing, debug only, make fatal
+  lda #$53    ;heart char
+  jsr fill_screen_chars
+  lda #$02
+  jsr fill_screen_cols
+  jmp *
 det_loc_type_finish
   stx Z_PLYR_LOC_TYPE
   rts
@@ -305,6 +372,23 @@ det_loc_type_finish
 ;==========================================================
 
 ; these routines are general and form a bespoke standard library
+
+
+; === wait_for_key
+;   loop continuously until key pressed
+; params:
+;   none
+; uses:
+;   A
+; side effects:
+;   none
+; returns:
+;   A - key code (ASCII) of key pressed
+wait_for_key
+  jsr FN_GETIN          ; use kernal GETIN function, get key input if any
+  cmp #$00              ; check if no (null) input
+  beq wait_for_key      ; if no input, continue to wait
+  rts                   ; otherwise return
 
 ; === fill_screen_chars
 ;   fill entire screen with single character
@@ -651,15 +735,19 @@ copy_mp2scr_finish
   rts
 
 
-; TODO : update to use non inclusive list size
 ; === match_byte_from_list
 ;   matches a given byte to byte in list
+; assumptions:
+;   list must start with a byte which is the size of data list (i.e. not including that len byte)
 ; params:
 ;   A - byte to match
 ;   X - list addr low byte
 ;   Y - list addr high byte
 ; uses:
 ;   A, X, Y
+;   Z_BYTE_MATCH_HIGH / LOW
+;   Z_BYTE_MATCH_BYTE
+;   Z_BYTE_MATCH_LIST_SIZE
 ; side effects:
 ;   none, X, Y restored to original value after
 ; returns:
@@ -671,18 +759,19 @@ match_byte_from_list
   ldy #$00                              ; zeroed zero page pointer offset
   lda (Z_BYTE_MATCH_LOW), Y             ; get list size to A
   sta Z_BYTE_MATCH_LIST_SIZE            ; store list size in temp zero page storage
+  inc Z_BYTE_MATCH_LOW                  ; increase low byte ptr to offset for start of data
 match_byte_from_list_loop
-  iny                                   ; Y++, pointer to next list entry
   lda (Z_BYTE_MATCH_LOW), Y             ; get next item of list to A
   cmp Z_BYTE_MATCH_BYTE                 ; compare list item with match char (in temp storage 2)
   beq match_byte_from_list_found        ; if match, goto found condition
   cpy Z_BYTE_MATCH_LIST_SIZE            ; check if reached end of list by comparing ptr index
-  bne match_byte_from_list_loop         ; if not yet reached then loop
+  beq match_byte_from_list_no_match     ; if not yet reached then loop
+  iny                                   ; Y++, next offset
+  jmp match_byte_from_list_loop         ; continue searching for match
 match_byte_from_list_no_match
   lda #$FF                              ; set no match code
   jmp match_byte_from_list_finish
 match_byte_from_list_found
-  dey                                   ; Y--, set Y to true index of match on list, not including list size entry
   tya                                   ; Y -> A, for return value
 match_byte_from_list_finish
   ldx Z_BYTE_MATCH_LOW                  ; restore low and high byte addr to X, Y
@@ -727,20 +816,43 @@ restore_registers
 * = $5000
 
 data_map_chars_list
-; len (15), amount + 14 chars of data
-!byte $0F
-!byte $14,$40,$42,$43,$5B,$5D,$6B,$6D,$6E,$70,$71,$72,$73,$7D
+; len 14, then 14 chars of data
+!byte $0E
+!byte $14,$40,$42,$43,$5B,$6B,$6D,$6E,$70,$71,$72,$73,$7D
+; note, $42 is visually identical to $5D, we prefer to use $42, be careful with this
 
+data_key_codes_to_facing_dir
+!byte $04
+;     Up  Rt  Lft Dwn
+;     'W' 'D' 'A' 'S'
+!byte $57,$44,$41,$53
+;!byte $AE,$AC,$B0,$53
+
+; TODO : Dwn (back) is not allowed, should enable this when supported
 data_front_facing_info
 ;     -----chars----- -----exits-----
 ;     Up  Rt  Lft Dwn Up  Rt  Lft Dwn
-!byte $42,$40,$40,$42,$FF,$00,$00,$FF     ; front only
-!byte $6B,$72,$71,$73,$FF,$FF,$00,$FF     ; front and right
-!byte $73,$71,$72,$6B,$FF,$00,$FF,$FF     ; front and left
-!byte $70,$6E,$6D,$7D,$00,$FF,$00,$FF     ; right only
-!byte $6E,$7D,$70,$6D,$00,$00,$FF,$FF     ; left only
-!byte $5B,$5B,$5B,$5B,$FF,$FF,$FF,$FF     ; front, left and right
-!byte $72,$73,$6B,$71,$00,$FF,$FF,$00     ; left and right
+!byte $42,$40,$40,$42,$00,$FF,$FF,$FF     ; front only
+!byte $6B,$72,$71,$73,$00,$00,$FF,$FF     ; front and right
+!byte $73,$71,$72,$6B,$00,$FF,$00,$FF     ; front and left
+!byte $70,$6E,$6D,$7D,$FF,$00,$FF,$FF     ; right only
+!byte $6E,$7D,$70,$6D,$FF,$FF,$00,$FF     ; left only
+!byte $5B,$5B,$5B,$5B,$00,$00,$00,$FF     ; front, left and right
+!byte $72,$73,$6B,$71,$FF,$00,$00,$FF     ; left and right
+
+data_facing_matrix
+;     Up  Rt  Lft Dwn
+!byte $00,$01,$02,$03 ; Up ->
+!byte $01,$03,$00,$02 ; Right ->
+!byte $02,$00,$03,$01 ; Left ->
+!byte $03,$02,$01,$00 ; Down ->
+
+data_x_movement_facing_dir
+;     Up  Rt  Lft Dwn
+!byte $01,$02,$00,$01
+data_y_movement_facing_dir
+;     Up  Rt  Lft Dwn
+!byte $00,$01,$01,$02
 
 ;==========================================================
 ; STRING DATA
@@ -772,28 +884,28 @@ data_str_pg1_facing_west
 * = $6000
 
 data_scr_map
-!byte 112,113,110,109,115,112,64,64,64,114,110,112,64,64,110,109,110,112,64,64,64,125,109,64,115,112,113,110,112,113,110,112,67,67,67,110,112,114,110,93
-!byte 109,110,66,112,91,125,112,64,114,113,115,109,64,110,107,64,91,125,111,111,111,111,111,111,109,115,112,125,93,112,115,93,112,64,114,113,125,93,66,93
-!byte 114,125,109,115,109,110,107,64,91,114,113,64,64,115,93,112,115,106,160,160,160,160,160,160,116,66,109,114,115,107,91,113,115,112,125,112,110,93,107,125
-!byte 93,112,110,107,64,113,125,112,115,109,110,112,64,115,107,125,93,106,160,160,160,160,160,160,116,109,114,125,93,107,91,110,66,93,112,113,91,113,91,110
-!byte 109,125,109,115,112,64,110,66,66,112,125,109,110,107,125,112,125,106,160,160,160,160,160,160,116,112,113,110,93,109,91,91,115,109,91,64,115,112,125,66
-!byte 64,64,114,125,109,110,109,125,66,107,114,64,115,107,110,109,110,106,160,160,160,160,160,160,116,107,64,125,93,112,115,93,107,110,107,110,66,109,114,125
-!byte 112,110,93,112,110,107,64,110,109,113,115,112,125,93,109,64,115,106,160,160,160,160,160,160,116,107,114,64,91,91,91,125,93,109,115,109,113,114,91,110
-!byte 93,109,113,115,107,125,112,115,112,64,113,107,64,113,64,64,125,106,160,160,160,160,160,160,116,109,113,64,125,109,91,110,107,64,91,64,64,115,93,93
-!byte 109,114,64,125,109,114,115,109,115,112,64,125,111,111,111,111,111,122,160,160,160,160,160,160,76,111,111,111,111,111,109,115,107,110,109,110,112,113,125,93
-!byte 64,115,112,64,110,109,91,110,93,109,110,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,125,66,112,125,107,64,64,125
-!byte 112,91,113,110,109,114,115,109,91,110,93,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,110,109,115,112,113,110,112,114
-!byte 93,107,64,113,114,125,109,110,109,115,93,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,91,64,113,91,64,91,125,93
-!byte 93,109,114,110,109,64,110,93,112,125,93,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,125,112,64,125,112,113,110,93
+!byte 112,113,110,109,115,112,64,64,64,114,110,112,64,64,110,109,110,112,64,64,64,125,109,64,115,112,113,110,112,113,110,112,67,67,67,110,112,114,110,66
+!byte 109,110,66,112,91,125,112,64,114,113,115,109,64,110,107,64,91,125,111,111,111,111,111,111,109,115,112,125,66,112,115,66,112,64,114,113,125,66,66,66
+!byte 114,125,109,115,109,110,107,64,91,114,113,64,64,115,66,112,115,106,160,160,160,160,160,160,116,66,109,114,115,107,91,113,115,112,125,112,110,66,107,125
+!byte 66,112,110,107,64,113,125,112,115,109,110,112,64,115,107,125,66,106,160,160,160,160,160,160,116,109,114,125,66,107,91,110,66,66,112,113,91,113,91,110
+!byte 109,125,109,115,112,64,110,66,66,112,125,109,110,107,125,112,125,106,160,160,160,160,160,160,116,112,113,110,66,109,91,91,115,109,91,64,115,112,125,66
+!byte 64,64,114,125,109,110,109,125,66,107,114,64,115,107,110,109,110,106,160,160,160,160,160,160,116,107,64,125,66,112,115,66,107,110,107,110,66,109,114,125
+!byte 112,110,66,112,110,107,64,110,109,113,115,112,125,66,109,64,115,106,160,160,160,160,160,160,116,107,114,64,91,91,91,125,66,109,115,109,113,114,91,110
+!byte 66,109,113,115,107,125,112,115,112,64,113,107,64,113,64,64,125,106,160,160,160,160,160,160,116,109,113,64,125,109,91,110,107,64,91,64,64,115,66,66
+!byte 109,114,64,125,109,114,115,109,115,112,64,125,111,111,111,111,111,122,160,160,160,160,160,160,76,111,111,111,111,111,109,115,107,110,109,110,112,113,125,66
+!byte 64,115,112,64,110,109,91,110,66,109,110,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,125,66,112,125,107,64,64,125
+!byte 112,91,113,110,109,114,115,109,91,110,66,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,110,109,115,112,113,110,112,114
+!byte 66,107,64,113,114,125,109,110,109,115,66,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,91,64,113,91,64,91,125,66
+!byte 66,109,114,110,109,64,110,66,112,125,66,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,125,112,64,125,112,113,110,66
 !byte 109,114,115,109,64,64,125,109,113,114,115,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,64,115,112,114,113,110,107,125
-!byte 112,125,107,64,64,64,114,64,64,113,125,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,93,112,115,109,115,112,113,91,110
-!byte 109,110,93,112,64,110,109,64,64,114,110,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,125,107,110,107,125,112,113,125
+!byte 112,125,107,64,64,64,114,64,64,113,125,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,66,112,115,109,115,112,113,91,110
+!byte 109,110,66,112,64,110,109,64,64,114,110,106,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,116,107,125,107,110,107,125,112,113,125
 !byte 112,115,109,125,112,113,64,114,64,91,125,106,160,160,160,160,160,160,79,20,119,119,119,80,160,160,160,160,160,160,116,109,114,115,107,91,110,66,112,110
-!byte 109,113,64,110,66,112,64,113,110,107,110,106,160,160,160,160,160,160,116,93,112,114,110,106,160,160,160,160,160,160,116,112,125,93,93,107,91,113,125,93
-!byte 64,64,64,91,113,91,110,112,125,93,93,106,160,160,160,160,160,160,116,107,125,107,115,106,160,160,160,160,160,160,116,109,110,93,107,115,109,64,64,113
-!byte 112,114,110,109,110,107,125,109,110,109,115,106,160,160,160,160,160,160,116,109,110,93,93,106,160,160,160,160,160,160,116,112,125,109,125,109,114,114,114,64
-!byte 125,93,93,112,91,113,64,114,113,64,115,106,160,160,160,160,160,160,116,112,91,113,125,106,160,160,160,160,160,160,116,107,64,64,64,64,115,93,93,112
-!byte 112,125,109,91,125,112,64,113,64,64,115,106,160,160,160,160,160,160,116,93,107,114,110,106,160,160,160,160,160,160,116,107,110,112,114,64,113,115,93,93
-!byte 107,110,112,113,64,115,112,64,64,110,109,110,119,119,119,119,119,119,112,91,125,93,107,110,119,119,119,119,119,119,112,125,93,107,115,112,110,107,91,115
-!byte 107,91,125,112,110,93,93,112,64,125,112,115,112,64,110,112,114,64,115,107,110,109,91,91,114,110,112,64,114,110,107,114,91,113,125,107,91,125,107,125
-!byte 125,109,114,125,109,125,93,109,64,64,125,109,125,112,113,125,109,110,109,125,109,64,125,109,113,113,125,112,125,109,125,93,109,64,64,125,109,64,125,112
+!byte 109,113,64,110,66,112,64,113,110,107,110,106,160,160,160,160,160,160,116,66,112,114,110,106,160,160,160,160,160,160,116,112,125,66,66,107,91,113,125,66
+!byte 64,64,64,91,113,91,110,112,125,66,66,106,160,160,160,160,160,160,116,107,125,107,115,106,160,160,160,160,160,160,116,109,110,66,107,115,109,64,64,113
+!byte 112,114,110,109,110,107,125,109,110,109,115,106,160,160,160,160,160,160,116,109,110,66,66,106,160,160,160,160,160,160,116,112,125,109,125,109,114,114,114,64
+!byte 125,66,66,112,91,113,64,114,113,64,115,106,160,160,160,160,160,160,116,112,91,113,125,106,160,160,160,160,160,160,116,107,64,64,64,64,115,66,66,112
+!byte 112,125,109,91,125,112,64,113,64,64,115,106,160,160,160,160,160,160,116,66,107,114,110,106,160,160,160,160,160,160,116,107,110,112,114,64,113,115,66,66
+!byte 107,110,112,113,64,115,112,64,64,110,109,110,119,119,119,119,119,119,112,91,125,66,107,110,119,119,119,119,119,119,112,125,66,107,115,112,110,107,91,115
+!byte 107,91,125,112,110,66,66,112,64,125,112,115,112,64,110,112,114,64,115,107,110,109,91,91,114,110,112,64,114,110,107,114,91,113,125,107,91,125,107,125
+!byte 125,109,114,125,109,125,66,109,64,64,125,109,125,112,113,125,109,110,109,125,109,64,125,109,113,113,125,112,125,109,125,66,109,64,64,125,109,64,125,112
