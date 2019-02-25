@@ -85,9 +85,12 @@ Z_BYTE_MATCH_BYTE       = $22
 Z_BYTE_MATCH_LIST_SIZE  = $23
 
 ; user data
-Z_PLYR_POS_X            = $40 ;$07
-Z_PLYR_POS_Y            = $41 ;$14 (20)
-Z_PLYR_FACING           = $42 ;$00   ;(0,1,2,3) -> (up,right,left,down)
+; - core
+Z_PLYR_POS_X            = $40
+Z_PLYR_POS_Y            = $41
+Z_PLYR_FACING           = $42
+; - helper
+Z_PLYR_LOC_TYPE         = $43
 
 
 ;==========================================================
@@ -118,7 +121,8 @@ Z_PLYR_FACING           = $42 ;$00   ;(0,1,2,3) -> (up,right,left,down)
 
 start_screen
   jsr set_screen_bg_cols    ; setup screen background and border colour to defaults
-  lda #CN_COL_VAL_D_GREY    ; fill screen with black colour, black characters on black, i.e. nothing visible even with char data
+  lda #CN_COL_VAL_BLACK     ; fill screen with black colour, black characters on black, i.e. nothing visible even with char data
+  ;lda #CN_COL_VAL_D_GREY    ; fill screen with GREY colour, for test purposes
   jsr fill_screen_cols
 start_map
   ldx #>data_scr_map        ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
@@ -130,7 +134,8 @@ start_player_data
   sta Z_PLYR_POS_Y
   lda #$00                  ; player facing direction = UP (0)
   sta Z_PLYR_FACING
-test_show_player_loc
+show_player_loc
+  ; player location shown by making col map at player pos white
   lda Z_PLYR_POS_X
   sta Z_SCR_X
   lda Z_PLYR_POS_Y
@@ -139,19 +144,8 @@ test_show_player_loc
   lda #CN_COL_VAL_WHITE
   ldy #$00
   sta (Z_COL_LOW_BYTE), Y
-test_write_strings
-  ; move plot point to string write position
-  lda #CN_XY_MAP_STR_LINE_1_X
-  sta Z_SCR_X
-  lda #CN_XY_MAP_STR_LINE_1_Y
-  sta Z_SCR_Y
-  jsr plot_set_xy
-  ; write string
-  lda #>data_str_page_1
-  sta Z_ADDR_1_HIGH
-  lda #<data_str_pg1_facing_north
-  sta Z_ADDR_1_LOW
-  jsr draw_chars_list
+show_player_facing_str
+  jsr write_player_facing_str
 infinite_loop
   jmp *
 
@@ -204,17 +198,122 @@ infinite_loop_old
 
 
 ;==========================================================
-; ROUTINES
+; ROUTINES - HIGH LEVEL
 ;==========================================================
+
+; these routines perform some common game particular function,
+; mostly using lower level functions
+
+; === write_player_facing_str
+;   write player facing string at first line (CN_XY_MAP_STR_LINE_1_X / Y) of map write space
+; params:
+;   none
+; uses:
+;   A, X
+;   Z_ADDR_1_HIGH / LOW
+; side effects:
+;   plot_xy:                    A, X, Y, c, plot variables
+;   draw_chars_list_with_col:   A, X, Y, Z_TEMP_1
+; returns:
+;   none
+write_player_facing_str
+  lda #>data_str_page_1
+  sta Z_ADDR_1_HIGH
+  lda Z_PLYR_FACING                 ; get player facing direction
+  cmp #$00                          ; check if north
+  beq show_pl_facing_str_n          ; if so, jump to north
+  cmp #$01
+  beq show_pl_facing_str_w
+  cmp #$02
+  beq show_pl_facing_str_e
+  lda #<data_str_pg1_facing_south   ; otherwise, pass through last condition, is south (facing == $03), load string low bytes
+  jmp show_pl_facing_str_finish
+show_pl_facing_str_n
+  lda #<data_str_pg1_facing_north   ; get low bytes for facing north string
+  jmp show_pl_facing_str_finish
+show_pl_facing_str_w
+  lda #<data_str_pg1_facing_west    ; get low bytes for facing north string
+  jmp show_pl_facing_str_finish
+show_pl_facing_str_e
+  lda #<data_str_pg1_facing_east    ; get low bytes for facing north string
+  jmp show_pl_facing_str_finish
+show_pl_facing_str_finish
+  sta Z_ADDR_1_LOW                  ; store low byte for string
+  ; move plot point to string write position
+  lda #CN_XY_MAP_STR_LINE_1_X
+  sta Z_SCR_X
+  lda #CN_XY_MAP_STR_LINE_1_Y
+  sta Z_SCR_Y
+  jsr plot_set_xy
+  ldx #CN_COL_VAL_WHITE             ; load white colour for string write
+  jsr draw_chars_list_with_col      ; finally write string
+  rts
+
+
+; === determine_location_type
+;   determines location type from player location and direction facing info,
+;   i.e. gets table row number in front facing info table, used in other routines and logic
+; assumptions:
+;   - player core data is correct
+;   - there are 7 rows of table data
+;   - table data does not cross page boundary
+; params:
+;   none
+; uses:
+;   A, X, Y, c
+;   Z_TEMP_1
+; side effects:
+;   none
+; returns:
+;   X and Z_PLYR_LOC_TYPE - row of location, or $FF if error
+;   Z_ADDR_1_LOW / HIGH pointing at row start, or last row if error
+;   plot_xy:    A, X, Y, c, plot variables
+determine_location_type
+  ; first get character at player location
+  lda Z_PLYR_POS_X                  ; store player pos x in plot x
+  sta Z_SCR_X
+  lda Z_PLYR_POS_Y                  ; store player pos y in plot y
+  sta Z_SCR_Y
+  jsr plot_set_xy                   ; move to player pos
+  lda (Z_SCR_LOW_BYTE), Y           ; get character at player post on map
+  sta Z_TEMP_1                      ; store char in temp storage 1
+  ; set up table scanning method
+  lda #>data_front_facing_info      ; load high byte (page) of front facing info table
+  sta Z_ADDR_1_HIGH                 ; store in general purpose addr 1 high byte zero page storage
+  lda #<data_front_facing_info      ; load low byte of table
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  ldx #$00                          ; zero X, will be used to count row
+  ldy Z_PLYR_FACING
+det_loc_type_loop
+  lda (Z_ADDR_1_LOW), Y             ; get character for this facing direction (Y) and row (addr 1)
+  cmp Z_TEMP_1
+  beq det_loc_type_finish           ; found, finish
+  inx                               ; otherwise X++, row to next row
+  cmp #$07                          ; check if row is on 8th row, i.e. gone past end
+  beq det_loc_type_row_err          ; if so, go to error state, exit
+  lda Z_ADDR_1_LOW                  ; get low byte of current addr 1 ptr
+  adc #$08                          ; add 8 to low byte count, i.e. next row (assumes does not cross page)
+  jmp det_loc_type_loop
+det_loc_type_row_err
+  ldx #$FF                          ; set row to error code
+det_loc_type_finish
+  stx Z_PLYR_LOC_TYPE
+  rts
+
+;==========================================================
+; ROUTINES - LOW LEVEL
+;==========================================================
+
+; these routines are general and form a bespoke standard library
 
 ; === fill_screen_chars
 ;   fill entire screen with single character
 ; params:
 ;   A - character to fill screen with
 ; uses:
-;   A, X
+;   A, X, ADDR 1 H / L, ADDR 2 H / L
 ; side effects:
-;   fill_mem routine called uses A, X, Z_ADDR_1 L/H, Z_ADDR_2 L/H
+;   fill_mem:   A, X, Y
 fill_screen_chars
   ldx #CN_SCR_MEM_START_LOW       ; set start / end addres in low / high for fill_mem call
   stx Z_ADDR_1_LOW
@@ -232,9 +331,9 @@ fill_screen_chars
 ; params:
 ;   A - colour to fill colour map with
 ; uses:
-;   A, X
+;   A, X, ADDR 1 H / L, ADDR 2 H / L
 ; side effects:
-;   fill_mem routine called uses A, X, Z_ADDR_1 L/H, Z_ADDR_2 L/H
+;   fill_mem:   A, X, Y
 fill_screen_cols
   ldx #CN_COL_MEM_START_LOW       ; set start / end addres in low / high for fill_mem call
   stx Z_ADDR_1_LOW
@@ -255,7 +354,7 @@ fill_screen_cols
 ;   Z_ADDR_2_HIGH / LOW - to memory location (inclusive)
 ;   A - byte to fill
 ; uses:
-;   X, Y, A
+;   A, X, Y
 ; side effects:
 ;   none
 fill_mem
@@ -290,7 +389,7 @@ fill_mem_finish
 ;   !!! plot_set_xy should already have been called to set up plot location
 ;   Z_ADDR_1_HIGH / LOW - memory location of char list / string
 ; uses:
-;   X, Y, A
+;   A, Y
 ;   Z_TEMP_1
 ; side effects:
 ;   modifies Z_ADDR_1_LOW to +1, make it easy to keep track of plotting position
@@ -308,6 +407,38 @@ draw_chars_list_next
   iny                       ; Y++
   cpy Z_TEMP_1              ; compare Y with char list len
   bne draw_chars_list_next  ; if not equal, continue with next char
+  rts                       ; otherwise, done, finish
+
+
+; === draw_chars_list_with_col
+;   draw a chars list (e.g. front sized char list AKA string) on screen at current screen plot pos, copying contents from memory.
+;   also writes a colour over character positions in col map.
+;   DOES NOT change plot positions
+; params:
+;   !!! plot_set_xy should already have been called to set up plot location
+;   Z_ADDR_1_HIGH / LOW - memory location of char list / string
+;   X - colour value to write over chars in col map
+; uses:
+;   A, X, Y
+;   Z_TEMP_1
+; side effects:
+;   modifies Z_ADDR_1_LOW to +1, make it easy to keep track of plotting position
+; returns:
+;   Y - size of char list written
+draw_chars_list_with_col
+  ldy #$00                  ; zero Y register, for indirect indexing
+draw_chars_list_wc_get_len
+  lda (Z_ADDR_1_LOW), Y     ; get length of char list
+  sta Z_TEMP_1              ; store char list len in temp zero page storage
+  inc Z_ADDR_1_LOW          ; increase low byte position to point at first element in list
+draw_chars_list_wc_next
+  lda (Z_ADDR_1_LOW), Y     ; get next character from memory to A
+  sta (Z_SCR_LOW_BYTE), Y   ; store character in screen mem
+  txa                       ; get colour from X -> A
+  sta (Z_COL_LOW_BYTE), Y   ; store character in screen mem
+  iny                       ; Y++
+  cpy Z_TEMP_1              ; compare Y with char list len
+  bne draw_chars_list_wc_next  ; if not equal, continue with next char
   rts                       ; otherwise, done, finish
 
 
@@ -335,7 +466,7 @@ set_screen_bg_cols
 ;   Z_SCR_X - x value
 ;   Z_SCR_Y - y value
 ; uses:
-;   X, Y, A, c
+;   A, X, Y, c
 ; side effects:
 ;   modifies all plot variables
 ;   translates to hi/low byte and resets offset
@@ -377,6 +508,8 @@ set_last_xy_return
 ;   assumes positions already set and correct (not out of range)
 ; params:
 ;   none
+; uses:
+;   A, c
 ; side effects:
 ;   all plot variables
 plot_inc_x
@@ -518,6 +651,7 @@ copy_mp2scr_finish
   rts
 
 
+; TODO : update to use non inclusive list size
 ; === match_byte_from_list
 ;   matches a given byte to byte in list
 ; params:
@@ -625,11 +759,11 @@ data_str_pg1_facing_south
 !byte $0C
 !scr "facing south"
 data_str_pg1_facing_east
-!byte $0B
-!scr "facing east"
+!byte $0C
+!scr "facing east "
 data_str_pg1_facing_west
-!byte $0B
-!scr "facing west"
+!byte $0C
+!scr "facing west "
 
 ;==========================================================
 ; IMAGE DATA
