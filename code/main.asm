@@ -69,18 +69,22 @@ Z_ADDR_4_HIGH     = $17
 Z_TEMP_1          = $18
 Z_TEMP_2          = $19
 Z_TEMP_3          = $1A
+Z_TEMP_4          = $1B
+
+Z_PSH_REG_A       = $1C
+Z_PSH_REG_X       = $1D
+Z_PSH_REG_Y       = $1E
 
 ; working vars for specific routines
-Z_PSH_REG_TEMP          = $20     ; push all registers temp storage
-Z_BYTE_MATCH_LOW        = $21
-Z_BYTE_MATCH_HIGH       = $22
-Z_BYTE_MATCH_BYTE       = $23
-Z_BYTE_MATCH_LIST_SIZE  = $24
+Z_BYTE_MATCH_LOW        = $20
+Z_BYTE_MATCH_HIGH       = $21
+Z_BYTE_MATCH_BYTE       = $22
+Z_BYTE_MATCH_LIST_SIZE  = $23
 
 ; user data
-Z_USR_POS_X             = $40 ;$07
-Z_USR_POS_Y             = $41 ;$20
-Z_USR_FACING            = $42 ;$00   ;(0,1,2,3) -> (up,right,left,down)
+Z_PLYR_POS_X            = $40 ;$07
+Z_PLYR_POS_Y            = $41 ;$14 (20)
+Z_PLYR_FACING           = $42 ;$00   ;(0,1,2,3) -> (up,right,left,down)
 
 
 ;==========================================================
@@ -110,61 +114,76 @@ Z_USR_FACING            = $42 ;$00   ;(0,1,2,3) -> (up,right,left,down)
 * = $1000
 
 start_screen
-  jsr set_screen_bg_cols
-  ;lda #CN_CHAR_SPACE
-  ;jsr fill_screen_chars
-  lda #CN_COL_VAL_D_GREY
+  jsr set_screen_bg_cols    ; setup screen background and border colour to defaults
+  lda #CN_COL_VAL_D_GREY    ; fill screen with black colour, black characters on black, i.e. nothing visible even with char data
   jsr fill_screen_cols
 start_map
-  ldx #>screen_map
+  ldx #>data_scr_map        ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
   jsr copy_map_chars_to_screen
+start_player_data
+  lda #$07                  ; player X pos = 07
+  sta Z_PLYR_POS_X
+  lda #$14                  ; player y pos = 20 ($14)
+  sta Z_PLYR_POS_Y
+  lda #$00                  ; player facing direction = UP (0)
+  sta Z_PLYR_FACING
+start_show_player_loc
+  lda Z_PLYR_POS_X
+  sta Z_SCR_X
+  lda Z_PLYR_POS_Y
+  sta Z_SCR_Y
+  jsr set_xy
+  lda #CN_COL_VAL_WHITE
+  ldy #$00
+  sta (Z_COL_LOW_BYTE), Y
+infinite_loop
   jmp *
 
 ; --- OLD
-  ldy #$00        ; zero Y, used in zero page indirect ($z),Y mem access below
-  lda #$00        ; zero x and y zero page coordinate storage
+  ldy #$00                  ; zero Y, used in zero page indirect ($z),Y mem access below
+  lda #$00                  ; zero x and y zero page coordinate storage
   sta Z_SCR_X
   sta Z_SCR_Y
-  lda #$53        ; store heart character code in A
-  ldx #$02        ; store RED colour value in X
-test_set_xy       ; (x,y) at (0,0)
-  jsr set_xy      ; (x,y) -> (high,low) for both screen and color map
+  lda #$53                  ; store heart character code in A
+  ldx #$02                  ; store RED colour value in X
+test_set_xy                 ; (x,y) at (0,0)
+  jsr set_xy                ; (x,y) -> (high,low) for both screen and color map
   sta (Z_SCR_LOW_BYTE), Y   ; write character to screen
-  pha             ; push A to stack
-  txa             ; X -> A, (for colour)
+  pha                       ; push A to stack
+  txa                       ; X -> A, (for colour)
   sta (Z_COL_LOW_BYTE), Y   ; write colour to map
-  pla             ; restore A from stack
+  pla                       ; restore A from stack
 test_set_xy_2
-  inc Z_SCR_Y     ; increase y coord by 1, not at (0,1)
+  inc Z_SCR_Y               ; increase y coord by 1, not at (0,1)
   jsr set_xy
   sta (Z_SCR_LOW_BYTE), Y
-  inx             ; X++, use next colour (CYAN)
+  inx                       ; X++, use next colour (CYAN)
   pha
   txa
   sta (Z_COL_LOW_BYTE), Y
   pla
 test_set_xy_offset_only
-  iny             ; increase Y by 1, which is not the y plot position but the offset used in mem access, i.e. is (x + 1), i.e. (1,1)
+  iny                       ; increase Y by 1, which is not the y plot position but the offset used in mem access, i.e. is (x + 1), i.e. (1,1)
   sta (Z_SCR_LOW_BYTE), Y
-  inx             ; X++, use next colour (PURPLE) not actaully used
-  inx             ; X++, use next colour (GREEN)
+  inx                       ; X++, use next colour (PURPLE) not actaully used
+  inx                       ; X++, use next colour (GREEN)
   pha
   txa
   sta (Z_COL_LOW_BYTE), Y
   pla
 test_set_xy_3
-  inc Z_SCR_X     ; increase x coord by 1
-  inc Z_SCR_Y     ; increase y coord by 1
-  ldy #$00        ; reset offset
-  jsr set_xy      ; (x,y) now at (1,2)
+  inc Z_SCR_X               ; increase x coord by 1
+  inc Z_SCR_Y               ; increase y coord by 1
+  ldy #$00                  ; reset offset
+  jsr set_xy                ; (x,y) now at (1,2)
   sta (Z_SCR_LOW_BYTE), Y
-  inx             ; X++, use next colour (BLUE)
+  inx                       ; X++, use next colour (BLUE)
   pha
   txa
   sta (Z_COL_LOW_BYTE), Y
   ;pla
 
-infinite_loop
+infinite_loop_old
   jmp *
 
 
@@ -277,7 +296,7 @@ set_screen_bg_cols
 ;   carry flag not restored (TODO)
 ;   translates to hi/low byte and resets offset
 set_xy
-  jsr push_all_registers
+  jsr save_registers
   ldx Z_SCR_X                           ; get x position from zero page var to X
   ldy Z_SCR_Y                           ; get y position from zero page var to Y
   lda #$04                              ; load high byte of screen start in A
@@ -307,7 +326,7 @@ set_last_xy_complex_add_finish_a
   sta Z_SCR_LOW_BYTE                    ; finally store A in low byte, has been keeping running low byte count
   sta Z_COL_LOW_BYTE                    ; repeat for col map
 set_last_xy_return
-  jsr pull_all_registers
+  jsr restore_registers
   rts
 
 
@@ -339,10 +358,10 @@ copy_vm2scr_loop
   lda (Z_ADDR_3_LOW), Y                 ; load next character from memory
   sta (Z_ADDR_1_LOW), Y                 ; store in character mem
   ; match byte to map list, check for colouring
-  sty Z_TEMP_2                     ; save Y in temp storage
-  sta Z_TEMP_3                     ; save A in temp storage
-  ldx #<list_of_map_chars                ; X <- low byte addr of list
-  ldy #>list_of_map_chars                ; Y <- high byte addr of list
+  sty Z_TEMP_2                          ; save Y in temp storage
+  sta Z_TEMP_3                          ; save A in temp storage
+  ldx #<data_map_chars_list             ; X <- low byte addr of list
+  ldy #>data_map_chars_list             ; Y <- high byte addr of list
   jsr match_byte_from_list
   cmp #$FF                              ; compare with not found code $FF
   beq copy_vm2scr_non_map_char
@@ -350,7 +369,7 @@ copy_vm2scr_is_map_char
   lda #$0B                              ; set colour to grey
   jmp copy_vm2scr_set_col
 copy_vm2scr_non_map_char
-  lda Z_TEMP_3                     ; get A (character) from temp storage
+  lda Z_TEMP_3                          ; get A (character) from temp storage
   cmp #$A0                              ; check if is full block (only used for centre)
   beq copy_vm2scr_block_char
   lda #$0F                              ; set colour to light gray
@@ -358,13 +377,13 @@ copy_vm2scr_non_map_char
 copy_vm2scr_block_char
   lda #$01                              ; set colour to white
 copy_vm2scr_set_col
-  ldy Z_TEMP_2                     ; restore Y from temp storage
+  ldy Z_TEMP_2                          ; restore Y from temp storage
   sta (Z_ADDR_2_LOW), Y                 ; store col in col mem
 copy_vm2scr_next_pos
   iny                                   ; increase Y offset, affects all pointers
   cpy #$00
   beq copy_vm2scr_next_page             ; check if byte wrapped around to #$00, if so add page
-  lda Z_TEMP_1                     ; load page counter to check if should check low byte amount
+  lda Z_TEMP_1                          ; load page counter to check if should check low byte amount
   cmp #$00
   bne copy_vm2scr_loop                  ; if didn't load zero then continue looping, only check low byte if no more pages left
   cpy #$E8                              ; check Y offset pointer against last position
@@ -374,7 +393,7 @@ copy_vm2scr_next_page
   inc Z_ADDR_1_HIGH                     ; increase page for all pointers
   inc Z_ADDR_2_HIGH
   inc Z_ADDR_3_HIGH
-  dec Z_TEMP_1                     ; decrease page counter by 1
+  dec Z_TEMP_1                          ; decrease page counter by 1
   jmp copy_vm2scr_loop                  ; continue, end is not exactly on a page
 copy_vm2scr_finish
   rts
@@ -461,33 +480,30 @@ match_byte_from_list_finish
   rts
 
 
-; === push_all_registers
-;   pushes the A, X, Y registers to stack
+; === save_registers
+;   save A, X, Y registers to zero page
 ; side effects:
-;   uses Z_PSH_REG_TEMP as temp storage, registers remain same as before this routine
-push_all_registers
-  sta Z_PSH_REG_TEMP                    ; save A in temp zero page storage
-  pha                                   ; push A to stack
-  tya                                   ; Y -> A, and push to stack
-  pha
-  txa                                   ; X -> A, and push to stack
-  pha
-  lda Z_PSH_REG_TEMP                    ; restore A from temp zero page storage
+;   uses Z_PSH_REG_A / X / Y as temp storage
+;   registers remain same as before this routine
+save_registers
+  sta Z_PSH_REG_A
+  stx Z_PSH_REG_X
+  sty Z_PSH_REG_Y
   rts
 
 
-; === pull_all_registers
-;   pushes the A, X, Y registers to stack
+; === restore_registers
+;   restore A, X, Y registers from temp zero page storage
+; params:
+;   Z_PSH_REG_A / X / Y are a kind of input, should be previously saved with save_registers
 ; side effects:
 ;   none
 ; return values:
-;   A, X, Y contain same values as pushed previously with push_all_registers
-pull_all_registers
-  pla                                   ; pull X value back from stack to A
-  tax                                   ; A -> X, from pulled stack
-  pla                                   ; pull Y value back from stack to A
-  tay                                   ; A -> Y, from pulled stack
-  pla                                   ; pull A value back from stack
+;   A, X, Y contain same values as pushed previously with save_registers
+restore_registers
+  lda Z_PSH_REG_A
+  ldx Z_PSH_REG_X
+  ldy Z_PSH_REG_Y
   rts
 
 
@@ -500,11 +516,11 @@ pull_all_registers
 
 * = $5000
 
-list_of_map_chars
+data_map_chars_list
 ; len (15), amount + 14 chars of data
 !byte $0F,$14,$40,$42,$43,$5B,$5D,$6B,$6D,$6E,$70,$71,$72,$73,$7D
 
-front_facing_info_data
+data_front_facing_info
 ;     -----chars----- -----exits-----
 ;     Up  Rt  Lft Dwn Up  Rt  Lft Dwn
 !byte $42,$40,$40,$42,$FF,$00,$00,$FF     ; front only
@@ -522,7 +538,7 @@ front_facing_info_data
 
 * = $6000
 
-screen_map
+data_scr_map
 !byte 112,113,110,109,115,112,64,64,64,114,110,112,64,64,110,109,110,112,64,64,64,125,109,64,115,112,113,110,112,113,110,112,67,67,67,110,112,114,110,93
 !byte 109,110,66,112,91,125,112,64,114,113,115,109,64,110,107,64,91,125,111,111,111,111,111,111,109,115,112,125,93,112,115,93,112,64,114,113,125,93,66,93
 !byte 114,125,109,115,109,110,107,64,91,114,113,64,64,115,93,112,115,106,160,160,160,160,160,160,116,66,109,114,115,107,91,113,115,112,125,112,110,93,107,125
