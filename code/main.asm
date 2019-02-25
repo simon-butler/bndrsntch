@@ -42,6 +42,9 @@ CN_COL_VAL_L_GREEN      = $0D
 CN_COL_VAL_L_BLUE       = $0E
 CN_COL_VAL_L_GREY       = $0F
 
+CN_XY_MAP_STR_LINE_1_X  = $0E
+CN_XY_MAP_STR_LINE_1_Y  = $0B
+
 
 ;==========================================================
 ; ZERO PAGE MAP
@@ -127,15 +130,28 @@ start_player_data
   sta Z_PLYR_POS_Y
   lda #$00                  ; player facing direction = UP (0)
   sta Z_PLYR_FACING
-start_show_player_loc
+test_show_player_loc
   lda Z_PLYR_POS_X
   sta Z_SCR_X
   lda Z_PLYR_POS_Y
   sta Z_SCR_Y
-  jsr set_xy
+  jsr plot_set_xy
   lda #CN_COL_VAL_WHITE
   ldy #$00
   sta (Z_COL_LOW_BYTE), Y
+test_write_strings
+  ; move plot point to string write position
+  lda #CN_XY_MAP_STR_LINE_1_X
+  sta Z_SCR_X
+  lda #CN_XY_MAP_STR_LINE_1_Y
+  sta Z_SCR_Y
+  jsr plot_set_xy
+  ; write string
+  lda #>data_str_page_1
+  sta Z_ADDR_1_HIGH
+  lda #<data_str_pg1_facing_north
+  sta Z_ADDR_1_LOW
+  jsr draw_chars_list
 infinite_loop
   jmp *
 
@@ -146,23 +162,23 @@ infinite_loop
   sta Z_SCR_Y
   lda #$53                  ; store heart character code in A
   ldx #$02                  ; store RED colour value in X
-test_set_xy                 ; (x,y) at (0,0)
-  jsr set_xy                ; (x,y) -> (high,low) for both screen and color map
+test_plot_set_xy                 ; (x,y) at (0,0)
+  jsr plot_set_xy                ; (x,y) -> (high,low) for both screen and color map
   sta (Z_SCR_LOW_BYTE), Y   ; write character to screen
   pha                       ; push A to stack
   txa                       ; X -> A, (for colour)
   sta (Z_COL_LOW_BYTE), Y   ; write colour to map
   pla                       ; restore A from stack
-test_set_xy_2
+test_plot_set_xy_2
   inc Z_SCR_Y               ; increase y coord by 1, not at (0,1)
-  jsr set_xy
+  jsr plot_set_xy
   sta (Z_SCR_LOW_BYTE), Y
   inx                       ; X++, use next colour (CYAN)
   pha
   txa
   sta (Z_COL_LOW_BYTE), Y
   pla
-test_set_xy_offset_only
+test_plot_set_xy_offset_only
   iny                       ; increase Y by 1, which is not the y plot position but the offset used in mem access, i.e. is (x + 1), i.e. (1,1)
   sta (Z_SCR_LOW_BYTE), Y
   inx                       ; X++, use next colour (PURPLE) not actaully used
@@ -171,11 +187,11 @@ test_set_xy_offset_only
   txa
   sta (Z_COL_LOW_BYTE), Y
   pla
-test_set_xy_3
+test_plot_set_xy_3
   inc Z_SCR_X               ; increase x coord by 1
   inc Z_SCR_Y               ; increase y coord by 1
   ldy #$00                  ; reset offset
-  jsr set_xy                ; (x,y) now at (1,2)
+  jsr plot_set_xy                ; (x,y) now at (1,2)
   sta (Z_SCR_LOW_BYTE), Y
   inx                       ; X++, use next colour (BLUE)
   pha
@@ -235,36 +251,64 @@ fill_screen_cols
 ; === fill_mem
 ;   fill memory range with a single byte
 ; params:
-;   Z_ADDR_1_HIGH / LOW - from memory location
-;   Z_ADDR_2_HIGH / LOW - to memory location
+;   Z_ADDR_1_HIGH / LOW - from memory location (inclusive)
+;   Z_ADDR_2_HIGH / LOW - to memory location (inclusive)
 ;   A - byte to fill
 ; uses:
 ;   X, Y, A
 ; side effects:
-;   carry flag not restored (TODO)
+;   none
 fill_mem
   ldy #$00                  ; zero Y register
   tax                       ; keep copy of byte in X
 fill_mem_loop
-  txa
-  sta (Z_ADDR_1_LOW), Y
-  inc Z_ADDR_1_LOW
-  lda Z_ADDR_1_LOW
-  bne fill_mem_check_high
+  txa                       ; restore byte to fill from X -> A
+  sta (Z_ADDR_1_LOW), Y     ; store byte to fill in next address
+  inc Z_ADDR_1_LOW          ; next mem addr, low byte
+  lda Z_ADDR_1_LOW          ; load low byte mem addr (automatically checks for zero)
+  bne fill_mem_check_high   ; if not zero, go to high byte check
 fill_mem_paged
-  inc Z_ADDR_1_HIGH
+  inc Z_ADDR_1_HIGH         ; increase high byte, since low byte wrapped from $FF to $00
 fill_mem_check_high
-  lda Z_ADDR_1_HIGH
-  cmp Z_ADDR_2_HIGH
-  beq fill_mem_check_low
-  jmp fill_mem_loop
+  lda Z_ADDR_1_HIGH         ; load high byte mem addr
+  cmp Z_ADDR_2_HIGH         ; check against ending high byte
+  beq fill_mem_check_low    ; if match (we're in last page) then go to check low byte for match
+  jmp fill_mem_loop         ; otherwise still more bytes, loop
 fill_mem_check_low
-  lda Z_ADDR_1_LOW
-  cmp Z_ADDR_2_LOW
-  beq fill_mem_finish
-  jmp fill_mem_loop
+  lda Z_ADDR_1_LOW          ; load high byte mem addr
+  cmp Z_ADDR_2_LOW          ; check against ending high byte (only reaches here if high byte already matched)
+  beq fill_mem_finish       ; if match then we're done, finish
+  jmp fill_mem_loop         ; otherwise still more bytes, loop
 fill_mem_finish
   rts
+
+
+; === draw_chars_list
+;   draw a chars list (e.g. front sized char list AKA string) on screen at current screen plot pos, copying contents from memory.
+;   DOES NOT change plot positions
+; params:
+;   !!! plot_set_xy should already have been called to set up plot location
+;   Z_ADDR_1_HIGH / LOW - memory location of char list / string
+; uses:
+;   X, Y, A
+;   Z_TEMP_1
+; side effects:
+;   modifies Z_ADDR_1_LOW to +1, make it easy to keep track of plotting position
+; returns:
+;   Y - size of char list written
+draw_chars_list
+  ldy #$00                  ; zero Y register, for indirect indexing
+draw_chars_list_get_len
+  lda (Z_ADDR_1_LOW), Y     ; get length of char list
+  sta Z_TEMP_1              ; store char list len in temp zero page storage
+  inc Z_ADDR_1_LOW          ; increase low byte position to point at first element in list
+draw_chars_list_next
+  lda (Z_ADDR_1_LOW), Y     ; get next character from memory to A
+  sta (Z_SCR_LOW_BYTE), Y   ; store character in screen mem
+  iny                       ; Y++
+  cpy Z_TEMP_1              ; compare Y with char list len
+  bne draw_chars_list_next  ; if not equal, continue with next char
+  rts                       ; otherwise, done, finish
 
 
 ; === set_screen_bg_cols
@@ -285,7 +329,7 @@ set_screen_bg_cols
   rts
 
 
-; === set_xy
+; === plot_set_xy
 ;   sets screen draw xy position, including color map position
 ; params:
 ;   Z_SCR_X - x value
@@ -293,10 +337,9 @@ set_screen_bg_cols
 ; uses:
 ;   X, Y, A, c
 ; side effects:
-;   carry flag not restored (TODO)
+;   modifies all plot variables
 ;   translates to hi/low byte and resets offset
-set_xy
-  jsr save_registers
+plot_set_xy
   ldx Z_SCR_X                           ; get x position from zero page var to X
   ldy Z_SCR_Y                           ; get y position from zero page var to Y
   lda #$04                              ; load high byte of screen start in A
@@ -326,7 +369,40 @@ set_last_xy_complex_add_finish_a
   sta Z_SCR_LOW_BYTE                    ; finally store A in low byte, has been keeping running low byte count
   sta Z_COL_LOW_BYTE                    ; repeat for col map
 set_last_xy_return
-  jsr restore_registers
+  rts
+
+; === plot_inc_x_line_wrap
+;   increase plot x position only, fast method for this common need,
+;   does not increase Y position, wraps back to left side if was at end.
+;   assumes positions already set and correct (not out of range)
+; params:
+;   none
+; side effects:
+;   all plot variables
+plot_inc_x
+  inc Z_SCR_X                           ; increase x position
+  lda Z_SCR_X                           ; load x position to A
+  cmp #$29                              ; check out of range, i.e. equal to 41 ($29)
+  bne plot_inc_x_add_to_bytes           ; if not, update bytes
+  lda #$00                              ; otherwise, set A to zero
+  sta Z_SCR_X                           ;   and store in X, i.e. back to left side
+  lda Z_SCR_LOW_BYTE                    ; load screen low byte (will be same as col map)
+  clc                                   ; clear carry flag, in prep for subtract
+  sbc $27                               ; subtract 39 from low byte
+  sta Z_SCR_LOW_BYTE                    ; save adjusted A as screen low byte
+  sta Z_COL_LOW_BYTE                    ;   and to col map low byte
+  bcc plot_inc_x_finish                 ; if carry (AKA borrow in this case) not set, nothing more to adjust, finish
+  dec Z_SCR_HI_BYTE                     ; otherwise decrease page of screen
+  dec Z_COL_HI_BYTE                     ;   and of col map
+  jmp plot_inc_x_finish
+plot_inc_x_add_to_bytes
+  inc Z_SCR_LOW_BYTE                    ; increase low byte of scr 
+  inc Z_COL_LOW_BYTE                    ; increase low byte of col map
+  lda Z_SCR_LOW_BYTE                    ; load screen low byte (will auto set zero flag if zero, i.e. wrapped)
+  bne plot_inc_x_finish                 ; if not zero, don't need to update page, done
+  inc Z_SCR_HI_BYTE                     ; otherwise increase page of screen
+  inc Z_COL_HI_BYTE                     ;   and of col map
+plot_inc_x_finish
   rts
 
 
@@ -518,7 +594,8 @@ restore_registers
 
 data_map_chars_list
 ; len (15), amount + 14 chars of data
-!byte $0F,$14,$40,$42,$43,$5B,$5D,$6B,$6D,$6E,$70,$71,$72,$73,$7D
+!byte $0F
+!byte $14,$40,$42,$43,$5B,$5D,$6B,$6D,$6E,$70,$71,$72,$73,$7D
 
 data_front_facing_info
 ;     -----chars----- -----exits-----
@@ -531,6 +608,28 @@ data_front_facing_info
 !byte $5B,$5B,$5B,$5B,$FF,$FF,$FF,$FF     ; front, left and right
 !byte $72,$73,$6B,$71,$00,$FF,$FF,$00     ; left and right
 
+;==========================================================
+; STRING DATA
+;==========================================================
+
+; strings are character lists, starting with list size NOT INCLUDING this byte
+; this makes the max char list size 254
+
+* = $5100
+
+data_str_page_1
+data_str_pg1_facing_north
+!byte $0C
+!scr "facing north"
+data_str_pg1_facing_south
+!byte $0C
+!scr "facing south"
+data_str_pg1_facing_east
+!byte $0B
+!scr "facing east"
+data_str_pg1_facing_west
+!byte $0B
+!scr "facing west"
 
 ;==========================================================
 ; IMAGE DATA
