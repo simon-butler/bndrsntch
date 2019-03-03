@@ -583,6 +583,12 @@ fill_screen_cols
 
 ; === fill_mem
 ;   fill memory range with a single byte
+; notes:
+;   this routine uses speed code and jumps to sub_fill_mem_unrolled_page if it can, it saves more than twice the cycles,
+;     about 7668 cycles better (including jsr and rts, but not unrolled check)
+;   you can comment out everything between the speed code tags and this will work fine without it.
+; assumptions:
+;   there is at least one byte to copy, if addr 1 == addr 2 entirely, this routine with have undefined results
 ; params:
 ;   Z_ADDR_1_HIGH / LOW - from memory location (inclusive)
 ;   Z_ADDR_2_HIGH / LOW - to memory location (inclusive)
@@ -593,7 +599,19 @@ fill_screen_cols
 ;   none
 fill_mem
   ldy #$00                  ; zero Y register
+  ; --- START SPEED CODE
   tax                       ; keep copy of byte in X
+fill_mem_unrolled_check     ; this is where we check to see if we can do an entire page as an unrolled loop, saving dozens of cycles
+  lda Z_ADDR_1_LOW          ; entire page must start at zero, check starting position low byte is $00
+  bne fill_mem_loop         ; if not zero (zero flag auto set when loading to A) can't do unrolled loop, skip to main loop
+  lda Z_ADDR_1_HIGH         ; load starting high byte mem addr 1
+  cmp Z_ADDR_2_HIGH         ; check against ending high byte
+  beq fill_mem_loop         ; if match then not a full page to do, can't do unrolled loop, skip to main loop
+  txa                       ; restore byte to fill from X -> A
+  jsr sub_fill_mem_unrolled_page    ; jump to sub routine to do an entire page
+  inc Z_ADDR_1_HIGH
+  jmp fill_mem_unrolled_check
+  ; --- END SPEED CODE
 fill_mem_loop
   txa                       ; restore byte to fill from X -> A
   sta (Z_ADDR_1_LOW), Y     ; store byte to fill in next address
@@ -954,6 +972,540 @@ restore_registers
   ldx Z_PSH_REG_X
   ldy Z_PSH_REG_Y
   rts
+
+
+; === sub_fill_mem_unrolled_page
+;   unrolled loop to fill a page of memory with a byte
+;   NOTE: this routine takes up 768 bytes, nearly a full page! if running out of space it could be commented out
+; assumptions:
+;   Y is already set to zero
+; params:
+;   A - byte to store in memory
+;   Z_ADDR_1_LOW / HIGH - set to starting point of memory page (doesn't technically need to be start of page at low byte $00)
+; uses:
+;   A, Y
+;   Z_ADDR_1_LOW / HIGH
+; side effects:
+;   none
+; returns:
+;   none
+sub_fill_mem_unrolled_page
+  sta (Z_ADDR_1_LOW), Y     ; store byte to fill in next address
+  iny                       ; $01
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $02
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $03
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $04
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $05
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $06
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $07
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $08
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $09
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $10
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $11
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $12
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $13
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $14
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $15
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $16
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $17
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $18
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $19
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $1A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $1B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $1C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $1D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $1E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $1F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $20
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $21
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $22
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $23
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $24
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $25
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $26
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $27
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $28
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $29
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $2A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $2B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $2C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $2D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $2E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $2F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $30
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $31
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $32
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $33
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $34
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $35
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $36
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $37
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $38
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $39
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $3A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $3B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $3C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $3D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $3E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $3F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $40
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $41
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $42
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $43
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $44
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $45
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $46
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $47
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $48
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $49
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $4A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $4B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $4C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $4D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $4E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $4F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $50
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $51
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $52
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $53
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $54
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $55
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $56
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $57
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $58
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $59
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $5A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $5B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $5C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $5D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $5E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $5F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $60
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $61
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $62
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $63
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $64
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $65
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $66
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $67
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $68
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $69
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $6A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $6B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $6C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $6D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $6E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $6F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $70
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $71
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $72
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $73
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $74
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $75
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $76
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $77
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $78
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $79
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $7A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $7B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $7C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $7D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $7E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $7F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $80
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $81
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $82
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $83
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $84
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $85
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $86
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $87
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $88
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $89
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $8A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $8B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $8C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $8D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $8E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $8F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $90
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $91
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $92
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $93
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $94
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $95
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $96
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $97
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $98
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $99
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $9A
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $9B
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $9C
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $9D
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $9E
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $9F
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A0
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A1
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A2
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A3
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A4
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A5
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A6
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A7
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A8
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A9
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $AA
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $AB
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $AC
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $AD
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $AE
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $AF
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B0
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B1
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B2
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B3
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B4
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B5
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B6
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B7
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B8
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B9
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $BA
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $BB
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $BC
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $BD
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $BE
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $BF
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C0
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C1
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C2
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C3
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C4
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C5
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C6
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C7
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C8
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C9
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $CA
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $CB
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $CC
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $CD
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $CE
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $CF
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D0
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D1
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D2
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D3
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D4
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D5
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D6
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D7
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D8
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D9
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $DA
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $DB
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $DC
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $DD
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $DE
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $DF
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E0
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E1
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E2
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E3
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E4
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E5
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E6
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E7
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E8
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E9
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $EA
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $EB
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $EC
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $ED
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $EE
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $EF
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F0
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F1
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F2
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F3
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F4
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F5
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F6
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F7
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F8
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $F9
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $FA
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $FB
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $FC
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $FD
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $FE
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $FF
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; back to $00
+  rts
+
+; this label is just here to easily see what the last address of routines is, for memory calculations
+debug_label_end_of_routines   ; = $1673 in this version
 
 
 ;==========================================================
