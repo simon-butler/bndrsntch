@@ -95,9 +95,14 @@ Z_PLYR_POS_X            = $40
 Z_PLYR_POS_Y            = $41
 Z_PLYR_FACING           = $42
 ; - helper
-Z_PLYR_LOC_TYPE         = $43
-Z_PLYR_LOC_TY_ADDR_LOW  = $44
-Z_PLYR_LOC_TY_ADDR_HIGH = $45
+Z_PLYR_LOC_TYPE         = $43     ; location type, i.e. the index in the types table, see data_front_facing_info
+Z_PLYR_LOC_TY_ADDR_LOW  = $44     ; low byte of addr of start of row of current type index
+Z_PLYR_LOC_TY_ADDR_HIGH = $45     ; high byte ^ same
+Z_PLYR_LOOK_AHEAD_TYPE  = $46     ; loc type of loc we can look ahead to (front path must be open in cur loc)
+Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW   = $47   ; low byte of addr of start of row of look ahead type index
+Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH  = $48   ; high byte ^ same
+Z_PLYR_LOOK_AHEAD_X     = $49     ; x pos of look ahead to next location, $FF if wall ahead (convinence)
+Z_PLYR_LOOK_AHEAD_Y     = $4A     ; y pos of ^ same
 
 
 ;==========================================================
@@ -127,55 +132,40 @@ Z_PLYR_LOC_TY_ADDR_HIGH = $45
 * = $1000
 
 start_screen
-  jsr set_screen_bg_cols    ; setup screen background and border colour to defaults
-  lda #CN_COL_VAL_BLACK     ; fill screen with black colour, black characters on black, i.e. nothing visible even with char data
-  ;lda #CN_COL_VAL_D_GREY    ; fill screen with GREY colour, for test purposes
+  jsr set_screen_bg_cols                ; setup screen background and border colour to defaults
+  lda #CN_COL_VAL_BLACK                 ; fill screen with black colour, black characters on black, i.e. nothing visible
+  ;lda #CN_COL_VAL_D_GREY               ; fill screen with GREY colour, for test purposes
   jsr fill_screen_cols
 start_map
-  ldx #>data_scr_map        ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
+  ldx #>data_scr_map                    ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
   jsr copy_map_chars_to_screen
 start_player_data
-  lda #$07                  ; player X pos = 07
+  lda #$07                              ; player X pos = 07
   sta Z_PLYR_POS_X
-  lda #$14                  ; player y pos = 20 ($14)
+  lda #$14                              ; player y pos = 20 ($14)
   sta Z_PLYR_POS_Y
-  lda #$00                  ; player facing direction = UP (0)
+  lda #$00                              ; player facing direction = UP (0)
   sta Z_PLYR_FACING
-update_player_pos_type
-  jsr determine_location_type
-show_player_loc
-  ; player location shown by making col map at player pos white
-  lda Z_PLYR_POS_X
-  sta Z_SCR_X
-  lda Z_PLYR_POS_Y
-  sta Z_SCR_Y
-  jsr plot_set_xy
-  lda #CN_COL_VAL_WHITE
-  ldy #$00
-  sta (Z_COL_LOW_BYTE), Y
-show_player_facing_str
-  jsr write_player_facing_str
-game_loop_move
+main_loop_update_player
+  jsr determine_location_type           ; update player location type pointers to data table
+  jsr update_player_look_ahead          ; update same for look ahead
+main_loop_show_plyr_on_map
+  jsr draw_std_player_on_map            ; draw player on map in standard colours
+  jsr write_player_facing_str           ; write "FACING XXXX" on map, where "XXXX" is direction (north, east, etc)
+main_loop_move
   jsr wait_for_key                      ; wait for a key from user
   ldx #<data_key_codes_to_facing_dir    ; set up LOW / HIGH addr of key to facing direction mapping
   ldy #>data_key_codes_to_facing_dir
   jsr match_byte_from_list              ; try to match key to facing direction
   cmp #$FF                              ; check if match failed
-  beq game_loop_move                    ; no match, continue getting key : TODO show bad input message
+  beq main_loop_move                    ; no match, continue getting key : TODO show bad input message
   pha                                   ; save A, direction to face
-  lda Z_PLYR_POS_X                      ; set player (x,y) to screen (x,y)
-  sta Z_SCR_X
-  lda Z_PLYR_POS_Y
-  sta Z_SCR_Y
-  jsr plot_set_xy                       ; update plot variables with (x,y)
-  lda #CN_COL_VAL_M_GREY                ; set A to medium grey
-  ldy #$00                              ; zero Y for indirect addr
-  sta (Z_COL_LOW_BYTE), Y               ; store A (med grey) in col map (at loc x,y)
+  jsr draw_dim_player_on_map            ; dim down (uses grey, not completely black) current player (and look ahead) pos on map
   pla                                   ; restore A, has direction to face
   jsr move_player_in_dir                ; try to move player in direction specified
   cmp #$FF                              ; check if move failed
-  beq show_player_loc                   ; move did fail, redraw current position as latest position
-  jmp update_player_pos_type            ; otherwise update from new move position, new draw and pass to main loop
+  beq main_loop_show_plyr_on_map        ; move did fail, redraw current position as latest position
+  jmp main_loop_update_player           ; otherwise update from new move position, new draw and pass to main loop
 infinite_loop
   jmp *
 
@@ -248,19 +238,179 @@ mv_plyr_in_dir_facing_read
   sta Z_ADDR_1_HIGH
   lda #<data_y_movement_facing_dir  ; same for low byte
   sta Z_ADDR_1_LOW
-  lda (Z_ADDR_1_LOW), Y             ; get amount to move in x direction (Y is still correct from x position update)
+  lda (Z_ADDR_1_LOW), Y             ; get amount to move in y direction (Y is still correct from y position update)
   sta Z_TEMP_2                      ; temp store 2 amount
   dec Z_PLYR_POS_Y                  ; amount needs to be offset by -1 by dec cur value, not using negative numbers
   lda Z_PLYR_POS_Y                  ; get position
   clc                               ; clear carry flag before addition
-  adc Z_TEMP_2                      ; add amount to move x position to x position
-  sta Z_PLYR_POS_Y                  ; store updated position back in player pos x
+  adc Z_TEMP_2                      ; add amount to move x position to y position
+  sta Z_PLYR_POS_Y                  ; store updated position back in player pos y
   lda Z_PLYR_FACING                 ; put updated / current player facing direction in A, is indication of success on return
   jmp mv_plyr_in_dir_finish
 mv_plyr_in_dir_failed
   lda Z_TEMP_1
 mv_plyr_in_dir_finish
   rts
+
+
+; === update_player_look_ahead
+;   updates the look ahead vars based on the current player position and location type
+; params:
+;   none
+; uses:
+;   A, Y
+;   Z_TEMP_1
+;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH
+; side effects:
+;   Z_PLYR_LOOK_AHEAD_TYPE
+;   Z_PLYR_LOOK_AHEAD_X / Y
+; returns:
+;   none
+update_player_look_ahead
+  ldy #$04                          ; set offset to facing direction part of location type row bytes, firsr one is UP, i.e. forward
+  lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get facing direction byte code ($00 = can move, $FF = can't move)
+  bne upd_plyr_look_ahead_off       ; if not $00, can't go or see forward as is a wall, set look ahead to off
+  ; set look ahead x pos
+  lda Z_PLYR_POS_X                  ; read current player x position to add to 
+  sta Z_PLYR_LOOK_AHEAD_X           ; store in look ahead x
+  lda #>data_x_movement_facing_dir  ; put high byte (page) of data x movement for new direction in addr 1
+  sta Z_ADDR_1_HIGH
+  lda #<data_x_movement_facing_dir  ; same for low byte
+  sta Z_ADDR_1_LOW
+  ldy Z_PLYR_FACING                 ; load new (and now current) player facing direction to Y for offset
+  lda (Z_ADDR_1_LOW), Y             ; get amount to move in x direction
+  sta Z_TEMP_1                      ; temp store 2 amount
+  dec Z_PLYR_LOOK_AHEAD_X           ; amount needs to be offset by -1 by dec cur value, not using negative numbers
+  lda Z_PLYR_LOOK_AHEAD_X           ; get position
+  clc                               ; clear carry flag before addition
+  adc Z_TEMP_1                      ; add amount to move x position to x position
+  sta Z_PLYR_LOOK_AHEAD_X           ; store updated position back in look ahead x
+  ; set look ahead y pos
+  lda Z_PLYR_POS_Y                  ; read current player y position to add to 
+  sta Z_PLYR_LOOK_AHEAD_Y           ; store in look ahead y
+  lda #>data_y_movement_facing_dir  ; put high byte (page) of data y movement for new direction in addr 1
+  sta Z_ADDR_1_HIGH
+  lda #<data_y_movement_facing_dir  ; same for low byte
+  sta Z_ADDR_1_LOW
+  lda (Z_ADDR_1_LOW), Y             ; get amount to move in y direction (Y is still correct from y position update)
+  sta Z_TEMP_1                      ; temp store 2 amount
+  dec Z_PLYR_LOOK_AHEAD_Y           ; amount needs to be offset by -1 by dec cur value, not using negative numbers
+  lda Z_PLYR_LOOK_AHEAD_Y           ; get position
+  clc                               ; clear carry flag before addition
+  adc Z_TEMP_1                      ; add amount to move y position to y position
+  sta Z_PLYR_LOOK_AHEAD_Y           ; store updated position back in look ahead y
+  ; TODO : read type in look ahead map location, and set low / high addr
+  lda #$FF
+  sta Z_PLYR_LOOK_AHEAD_TYPE
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
+  jmp upd_plyr_look_ahead_finish
+upd_plyr_look_ahead_off
+  lda #$FF
+  sta Z_PLYR_LOOK_AHEAD_TYPE
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
+  sta Z_PLYR_LOOK_AHEAD_X
+  sta Z_PLYR_LOOK_AHEAD_Y
+upd_plyr_look_ahead_finish
+  rts
+
+; === draw_std_player_on_map
+;   wrapper for normal draw colours of draw_player_map_pos
+; params:
+;   none
+; uses:
+;   X, Y
+; side effects:
+;   draw_player_map_pos: A, X, Y, Z_TEMP_1, Z_TEMP_2, all player core and some helper data
+; returns:
+;   none
+draw_std_player_on_map
+  ldx #CN_COL_VAL_WHITE
+  ldy #CN_COL_VAL_L_GREY
+  jsr draw_player_map_pos
+  rts
+
+
+; === draw_dim_player_on_map
+;   wrapper for normal draw colours of draw_player_map_pos
+; params:
+;   none
+; uses:
+;   X, Y
+; side effects:
+;   draw_player_map_pos: A, X, Y, Z_TEMP_1, Z_TEMP_2, all player core and some helper data
+; returns:
+;   none
+draw_dim_player_on_map
+  ldx #CN_COL_VAL_D_GREY
+  ldy #CN_COL_VAL_D_GREY
+  jsr draw_player_map_pos
+  rts
+
+
+; === draw_player_map_pos
+;   draw (with colour only) player position (and look ahead pos if exists) on map on screen
+; params:
+;   X - player loc colour
+;   Y - look ahead loc colour
+; uses:
+;   A, X, Y
+;   Z_TEMP_1, Z_TEMP_2
+;   all player core and some helper data
+; side effects:
+;   none
+; returns:
+;   none
+draw_player_map_pos
+  stx Z_TEMP_1                ; store player loc colour from X -> temp 1
+  sty Z_TEMP_2                ; store look ahead loc colour from Y -> temp 2
+  ldy #$00                    ; set Y to zero, used in indirect addressing
+  lda Z_PLYR_POS_X            ; load player position x
+  sta Z_SCR_X                 ; store in screen plot x
+  lda Z_PLYR_POS_Y            ; load player position y
+  sta Z_SCR_Y                 ; store in screen plot y
+  jsr plot_set_xy             ; update plot variables based on inputed (x,y)
+  lda Z_TEMP_1                ; load player loc colour
+  sta (Z_COL_LOW_BYTE), Y     ; store in player pos
+  lda Z_PLYR_LOOK_AHEAD_X     ; load look ahead x pos
+  cmp #$FF                    ; compare with disabled code
+  beq draw_plyr_mp_pos_finish ; if is disabled, finish, don't draw look ahead
+  sta Z_SCR_X                 ; otherwise store in screen plot x
+  lda Z_PLYR_LOOK_AHEAD_Y     ; load look ahead y
+  sta Z_SCR_Y                 ; store in screen plot y
+  jsr plot_set_xy             ; update plot variables based on inputed (x,y)
+  lda Z_TEMP_2                ; load look ahead loc colour
+  sta (Z_COL_LOW_BYTE), Y     ; store in look ahead pos
+draw_plyr_mp_pos_finish
+  rts
+
+
+; === draw_darken_look_ahead
+;   darken the player look ahead drawing location, use for when no longer looking at it
+; params:
+;   none
+; uses:
+;   A, Y
+;   all player core and some helper data
+; side effects:
+;   none
+; returns:
+;   none
+draw_darken_look_ahead
+  ldy #$00                    ; set Y to zero, used in indirect addressing
+  lda Z_PLYR_LOOK_AHEAD_X     ; load look ahead x pos
+  cmp #$FF                    ; compare with disabled code
+  beq draw_drk_lk_ahd_finish  ; if is disabled, finish, don't draw look ahead
+  sta Z_SCR_X                 ; otherwise store in screen plot x
+  lda Z_PLYR_LOOK_AHEAD_Y     ; load look ahead y
+  sta Z_SCR_Y                 ; store in screen plot y
+  jsr plot_set_xy             ; update plot variables based on inputed (x,y)
+  lda #CN_COL_VAL_M_GREY      ; load medium grey
+  sta (Z_COL_LOW_BYTE), Y     ; store medium grey in look ahead pos
+draw_drk_lk_ahd_finish
+  rts
+
 
 ; === write_player_facing_str
 ;   write player facing string at first line (CN_XY_MAP_STR_LINE_1_X / Y) of map write space
