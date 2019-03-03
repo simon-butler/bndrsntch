@@ -212,7 +212,7 @@ start_init_player_data
   lda #$00                              ; player facing direction = UP (0)
   sta Z_PLYR_FACING
 start_enter_screen
-  ;jmp start_first_person
+  jmp start_first_person
   ; NOTE - in this version map is unreachable
 ;*** map mode
 start_map
@@ -256,6 +256,7 @@ start_first_person
   sta VIC_BG_COL
 first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
+  jsr special_char_test                 ; character test of all special characters for bank 1
 unreachable_infinite_loop
   jmp *
 
@@ -652,6 +653,23 @@ draw_two_tone_bg
   lda #CN_SPEC_CHAR_BLANK
   jsr fill_mem
   rts
+
+
+; === special_char_test
+special_char_test
+  lda #CN_BK1_SCR_START_LOW
+  sta Z_ADDR_1_LOW
+  lda #CN_BK1_SCR_START_HIGH
+  sta Z_ADDR_1_HIGH
+  ldy #$00
+special_char_test_loop
+  tya
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  cpy #$13
+  bne special_char_test_loop
+  rts
+
 
 ;==========================================================
 ; ROUTINES - LOW LEVEL
@@ -1878,8 +1896,25 @@ data_scr_map
 
 * = $5000
 
-!byte $00,$00,$00,$00,$00,$00,$00,$00   ; blank
-!byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; block
+!byte $00,$00,$00,$00,$00,$00,$00,$00   ; $00 - blank
+!byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; $01 - block
+!byte $FE,$FC,$F8,$F0,$E0,$C0,$80,$00   ; $02 - top left filled diagonal half
+!byte $01,$03,$07,$0F,$1F,$3F,$7F,$FF   ; $03 - bottom right filled diagonal half
+!byte $7F,$3F,$1F,$0F,$07,$03,$01,$00   ; $04 - top right filled diagonal half
+!byte $80,$C0,$E0,$F0,$F8,$FC,$FE,$FF   ; $05 - bottom left filled diagonal half
+!byte $FC,$F8,$F1,$E3,$C7,$8F,$1F,$3F   ; $06 - top left and bottom right filled diagonal halves
+!byte $3F,$1F,$8F,$C7,$E3,$F1,$F8,$FC   ; $07 - top right and bottom left filled diagonal halves
+!byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$7F   ; $08 - bottom left tiny block
+!byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FE   ; $09 - bottom right tiny block
+!byte $FE,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; $0A - top right tiny block
+!byte $7F,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; $0B - top left tiny block
+!byte $FC,$FC,$FC,$FC,$FC,$FC,$FC,$FC   ; $0C - left side almost block
+!byte $3F,$3F,$3F,$3F,$3F,$3F,$3F,$3F   ; $0D - right side almost block
+!byte $3C,$3C,$3C,$3C,$3C,$3C,$3C,$3C   ; $0E - left and right side almost block
+!byte $FF,$FF,$FF,$FF,$FF,$FF,$00,$00   ; $0F - top side almost block
+!byte $00,$00,$FF,$FF,$FF,$FF,$FF,$FF   ; $10 - bottom side almost block
+!byte $FC,$F8,$F0,$E0,$C4,$8C,$1C,$3C   ; $11 - top right filled diagonal half and bottom right sided island
+!byte $3F,$1F,$0F,$07,$23,$31,$38,$3C   ; $12 - top left filled diagonal half and bottom left sided island
 
 ;==========================================================
 ; IMAGE DATA
