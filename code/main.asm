@@ -6,10 +6,34 @@
 ;==========================================================
 
 ;==========================================================
+; MEMORY MAP
+;
+; Video bank 1 $4000 - $7FFF is used for first person mode
+; Video bank 2 $8000 - $BFFF is used for map mode
+;
+; $1000 - $2000   : main code and routines
+; $3000 - $3200   : tables and data
+; $4400 - $47FF   : screen for first person mode (bank 1)
+; $5000 - $57FF   : character map for first person (bank 1) written directly by loader
+; $8400 - $87FF   : screen for map mode (bank 2) written to directly by loader
+; 
+;==========================================================
+
+;==========================================================
 ; SYSTEM AND KERNAL ROUTINES 
 ;==========================================================
 
-FN_GETIN        = $FFE4     ; get character from buffer (keyboard buffer unless changed)
+FN_GETIN                = $FFE4     ; get character from buffer (keyboard buffer unless changed)
+
+;==========================================================
+; VIC MEM LOCATIONS
+;==========================================================
+
+VIC_BG_COL              = $D021
+VIC_BORDER_COL          = $D020
+
+VIC_CIA2_BANK_SELECT    = $DD00     ; bits 0, 1 are system memroy bank select (default 11b)
+VIC_CIA2_DATA_DIR_A     = $DD02     ; set bits 0, 1 to enable bank switching
 
 ;==========================================================
 ; PRE-PROCESSED CONSTANTS
@@ -18,17 +42,62 @@ FN_GETIN        = $FFE4     ; get character from buffer (keyboard buffer unless 
 ; IMPORTANT!!! don't forget to use # before using the constants,
 ;         or they will be probably treated as zero page addresses
 
-CN_SCR_MEM_START_LOW    = $00
-CN_SCR_MEM_START_HIGH   = $04
-CN_SCR_MEM_END_LOW      = $E8
-CN_SCR_MEM_END_HIGH     = $07
+CN_VID_BANK_0           = $03
+CN_VID_BANK_1           = $02
+CN_VID_BANK_2           = $01
+CN_VID_BANK_3           = $00
+
+; video bank 0
+CN_BK0_SCR_START_LOW    = $00
+CN_BK0_SCR_START_HIGH   = $04
+CN_BK0_SCR_END_LOW      = $E8
+CN_BK0_SCR_END_HIGH     = $07
+
+CN_BK0_CHMAP_START_LOW  = $00
+CN_BK0_CHMAP_START_HIGH = $C0
+CN_BK0_CHMAP_END_LOW    = $FF
+CN_BK0_CHMAP_END_HIGH   = $CF
+
+; video bank 1
+CN_BK1_SCR_START_LOW    = $00
+CN_BK1_SCR_START_HIGH   = $44
+CN_BK1_SCR_END_LOW      = $E8
+CN_BK1_SCR_END_HIGH     = $47
+
+CN_BK1_SCR_MIDLINE_LOW  = $08   ; midline is up to and including the first 13 lines
+CN_BK1_SCR_MIDLINE_HIGH = $46
+
+CN_BK1_CHMAP_START_LOW  = $00
+CN_BK1_CHMAP_START_HIGH = $50
+CN_BK1_CHMAP_END_LOW    = $FF
+CN_BK1_CHMAP_END_HIGH   = $5F
+
+; video bank 2
+CN_BK2_SCR_START_LOW    = $00
+CN_BK2_SCR_START_HIGH   = $84
+CN_BK2_SCR_END_LOW      = $E8
+CN_BK2_SCR_END_HIGH     = $87
+
+; video bank 3
+CN_BK3_SCR_START_LOW    = $00   ; bank 3 not used, just here for helper generalisation completeness
+CN_BK3_SCR_START_HIGH   = $C4
+CN_BK3_SCR_END_LOW      = $E8
+CN_BK3_SCR_END_HIGH     = $C7
 
 CN_COL_MEM_START_LOW    = $00
 CN_COL_MEM_START_HIGH   = $D8
+CN_COL_MEM_MIDLINE_LOW  = $08   ; midline is up to and including the first 13 lines
+CN_COL_MEM_MIDLINE_HIGH = $DA
 CN_COL_MEM_END_LOW      = $E8
 CN_COL_MEM_END_HIGH     = $DB
 
+; PESCII characters
 CN_CHAR_SPACE           = $20
+CN_CHAR_BLOCK           = $A0
+
+; special characters, used in video bank 1 char set
+CN_SPEC_CHAR_BLANK      = $00
+CN_SPEC_CHAR_BLOCK      = $01
 
 CN_COL_VAL_BLACK        = $00
 CN_COL_VAL_WHITE        = $01
@@ -62,7 +131,8 @@ Z_SCR_LOW_BYTE    = $04
 Z_SCR_HI_BYTE     = $05
 Z_COL_LOW_BYTE    = $06
 Z_COL_HI_BYTE     = $07
-Z_OFFSET          = $08
+Z_SCR_START_LOW   = $08   ; this is set by the set_video_bank function, can be overridden
+Z_SCR_START_HIGH  = $09
 
 ; general purpose low/high address pairs
 Z_ADDR_1_LOW      = $10
@@ -131,42 +201,62 @@ Z_PLYR_LOOK_AHEAD_Y     = $4A     ; y pos of ^ same
 +start_at $1000
 * = $1000
 
-start_screen
-  jsr set_screen_bg_cols                ; setup screen background and border colour to defaults
-  lda #CN_COL_VAL_BLACK                 ; fill screen with black colour, black characters on black, i.e. nothing visible
-  ;lda #CN_COL_VAL_D_GREY               ; fill screen with GREY colour, for test purposes
-  jsr fill_screen_cols
-start_map
-  ldx #>data_scr_map                    ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
-  jsr copy_map_chars_to_screen
-start_player_data
+start_game
+  jsr init_helper_vars
+  jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
+start_init_player_data
   lda #$07                              ; player X pos = 07
   sta Z_PLYR_POS_X
   lda #$14                              ; player y pos = 20 ($14)
   sta Z_PLYR_POS_Y
   lda #$00                              ; player facing direction = UP (0)
   sta Z_PLYR_FACING
-main_loop_update_player
+start_enter_screen
+  ;jmp start_first_person
+  ; NOTE - in this version map is unreachable
+;*** map mode
+start_map
+  lda #CN_VID_BANK_2                    ; load code for video bank 2
+  jsr set_video_bank                    ; set video bank to 2
+  lda #CN_COL_VAL_D_GREY                ; set border colour to dark grey
+  sta VIC_BORDER_COL
+  lda #CN_COL_VAL_BLACK                 ; set background colour to black
+  sta VIC_BG_COL
+  ;lda #CN_COL_VAL_D_GREY               ; fill screen with GREY colour, for test purposes
+  jsr fill_screen_cols                  ; fill screen with black colour, black characters on black, i.e. nothing visible
+  ldx #>data_scr_map                    ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
+  ;jsr copy_map_chars_to_screen
+map_loop_update_player
   jsr determine_location_type           ; update player location type pointers to data table
   jsr update_player_look_ahead          ; update same for look ahead
-main_loop_show_plyr_on_map
+map_loop_show_plyr_on_map
   jsr draw_std_player_on_map            ; draw player on map in standard colours
   jsr write_player_facing_str           ; write "FACING XXXX" on map, where "XXXX" is direction (north, east, etc)
-main_loop_move
+map_loop_move
   jsr wait_for_key                      ; wait for a key from user
   ldx #<data_key_codes_to_facing_dir    ; set up LOW / HIGH addr of key to facing direction mapping
   ldy #>data_key_codes_to_facing_dir
   jsr match_byte_from_list              ; try to match key to facing direction
   cmp #$FF                              ; check if match failed
-  beq main_loop_move                    ; no match, continue getting key : TODO show bad input message
+  beq map_loop_move                     ; no match, continue getting key : TODO show bad input message
   pha                                   ; save A, direction to face
   jsr draw_dim_player_on_map            ; dim down (uses grey, not completely black) current player (and look ahead) pos on map
   pla                                   ; restore A, has direction to face
   jsr move_player_in_dir                ; try to move player in direction specified
   cmp #$FF                              ; check if move failed
-  beq main_loop_show_plyr_on_map        ; move did fail, redraw current position as latest position
-  jmp main_loop_update_player           ; otherwise update from new move position, new draw and pass to main loop
-infinite_loop
+  beq map_loop_show_plyr_on_map         ; move did fail, redraw current position as latest position
+  jmp map_loop_update_player            ; otherwise update from new move position, new draw and pass to main loop
+;*** first person mode
+start_first_person
+  lda #CN_VID_BANK_1                    ; load code for video bank 1
+  jsr set_video_bank                    ; set video bank to 1
+  lda #CN_COL_VAL_BLACK                 ; set border col to black
+  sta VIC_BORDER_COL
+  lda #CN_COL_VAL_L_BLUE                ; set background col to light blue
+  sta VIC_BG_COL
+first_pers_draw_scr
+  jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
+unreachable_infinite_loop
   jmp *
 
 
@@ -176,6 +266,128 @@ infinite_loop
 
 ; these routines perform some common game particular function,
 ; mostly using lower level functions
+
+; === determine_location_type
+;   determines location type from player location and direction facing info,
+;   i.e. gets table row number in front facing info table, used in other routines and logic
+; assumptions:
+;   - player core data is correct
+;   - there are 7 rows of table data
+;   - table data does not cross page boundary
+; params:
+;   none
+; uses:
+;   A, X, Y, c
+;   Z_TEMP_1
+; side effects:
+;   none
+; returns:
+;   X and Z_PLYR_LOC_TYPE - row of location, or $FF if error
+;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH pointing at row start, or last row if error
+;   plot_xy:    A, X, Y, c, plot variables
+determine_location_type
+  ; first get character at player location
+  lda Z_PLYR_POS_X                  ; store player pos x in plot x
+  sta Z_SCR_X
+  lda Z_PLYR_POS_Y                  ; store player pos y in plot y
+  sta Z_SCR_Y
+  jsr plot_set_xy                   ; move to player pos
+  ldy #$00                          ; zero Y, for indirect mem access
+  lda (Z_SCR_LOW_BYTE), Y           ; get character at player post on map
+  sta Z_TEMP_1                      ; store char in temp storage 1
+  ; set up table scanning method
+  lda #>data_front_facing_info      ; load high byte (page) of front facing info table
+  sta Z_PLYR_LOC_TY_ADDR_HIGH       ; store in high byte of player location type addr
+  lda #<data_front_facing_info      ; load low byte of table
+  sta Z_PLYR_LOC_TY_ADDR_LOW        ; store in low byte of player location type addr
+  ldx #$00                          ; zero X, will be used to count row
+  ldy Z_PLYR_FACING
+det_loc_type_loop
+  lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get character for this facing direction (Y) and row (with addr)
+  cmp Z_TEMP_1
+  beq det_loc_type_finish           ; found, finish
+  inx                               ; otherwise X++, row to next row
+  cpx #$07                          ; check if row is on 8th row, i.e. gone past end
+  beq det_loc_type_row_err          ; if so, go to error state, exit
+  lda Z_PLYR_LOC_TY_ADDR_LOW        ; get low byte of current addr 1 ptr
+  clc                               ; clear carry flag before addition
+  adc #$08                          ; add 8 to low byte count, i.e. next row (assumes does not cross page)
+  sta Z_PLYR_LOC_TY_ADDR_LOW        ; store updated low byte address
+  jmp det_loc_type_loop
+det_loc_type_row_err
+  ldx #$FF                          ; set row to error code
+  ; TODO : remove this error handing, debug only, make fatal
+  lda #$53    ;heart char
+  jsr fill_screen_chars
+  lda #$02
+  jsr fill_screen_cols
+  jmp *
+det_loc_type_finish
+  stx Z_PLYR_LOC_TYPE
+  rts
+
+
+; === update_player_look_ahead
+;   updates the look ahead vars based on the current player position and location type
+; params:
+;   none
+; uses:
+;   A, Y
+;   Z_TEMP_1
+;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH
+; side effects:
+;   Z_PLYR_LOOK_AHEAD_TYPE
+;   Z_PLYR_LOOK_AHEAD_X / Y
+; returns:
+;   none
+update_player_look_ahead
+  ldy #$04                          ; set offset to facing direction part of location type row bytes, firsr one is UP, i.e. forward
+  lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get facing direction byte code ($00 = can move, $FF = can't move)
+  bne upd_plyr_look_ahead_off       ; if not $00, can't go or see forward as is a wall, set look ahead to off
+  ; set look ahead x pos
+  lda Z_PLYR_POS_X                  ; read current player x position to add to 
+  sta Z_PLYR_LOOK_AHEAD_X           ; store in look ahead x
+  lda #>data_x_movement_facing_dir  ; put high byte (page) of data x movement for new direction in addr 1
+  sta Z_ADDR_1_HIGH
+  lda #<data_x_movement_facing_dir  ; same for low byte
+  sta Z_ADDR_1_LOW
+  ldy Z_PLYR_FACING                 ; load new (and now current) player facing direction to Y for offset
+  lda (Z_ADDR_1_LOW), Y             ; get amount to move in x direction
+  sta Z_TEMP_1                      ; temp store 2 amount
+  dec Z_PLYR_LOOK_AHEAD_X           ; amount needs to be offset by -1 by dec cur value, not using negative numbers
+  lda Z_PLYR_LOOK_AHEAD_X           ; get position
+  clc                               ; clear carry flag before addition
+  adc Z_TEMP_1                      ; add amount to move x position to x position
+  sta Z_PLYR_LOOK_AHEAD_X           ; store updated position back in look ahead x
+  ; set look ahead y pos
+  lda Z_PLYR_POS_Y                  ; read current player y position to add to 
+  sta Z_PLYR_LOOK_AHEAD_Y           ; store in look ahead y
+  lda #>data_y_movement_facing_dir  ; put high byte (page) of data y movement for new direction in addr 1
+  sta Z_ADDR_1_HIGH
+  lda #<data_y_movement_facing_dir  ; same for low byte
+  sta Z_ADDR_1_LOW
+  lda (Z_ADDR_1_LOW), Y             ; get amount to move in y direction (Y is still correct from y position update)
+  sta Z_TEMP_1                      ; temp store 2 amount
+  dec Z_PLYR_LOOK_AHEAD_Y           ; amount needs to be offset by -1 by dec cur value, not using negative numbers
+  lda Z_PLYR_LOOK_AHEAD_Y           ; get position
+  clc                               ; clear carry flag before addition
+  adc Z_TEMP_1                      ; add amount to move y position to y position
+  sta Z_PLYR_LOOK_AHEAD_Y           ; store updated position back in look ahead y
+  ; TODO : read type in look ahead map location, and set low / high addr
+  lda #$FF
+  sta Z_PLYR_LOOK_AHEAD_TYPE
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
+  jmp upd_plyr_look_ahead_finish
+upd_plyr_look_ahead_off
+  lda #$FF
+  sta Z_PLYR_LOOK_AHEAD_TYPE
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
+  sta Z_PLYR_LOOK_AHEAD_X
+  sta Z_PLYR_LOOK_AHEAD_Y
+upd_plyr_look_ahead_finish
+  rts
 
 
 ; === move_player_in_dir
@@ -253,67 +465,9 @@ mv_plyr_in_dir_finish
   rts
 
 
-; === update_player_look_ahead
-;   updates the look ahead vars based on the current player position and location type
-; params:
-;   none
-; uses:
-;   A, Y
-;   Z_TEMP_1
-;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH
-; side effects:
-;   Z_PLYR_LOOK_AHEAD_TYPE
-;   Z_PLYR_LOOK_AHEAD_X / Y
-; returns:
-;   none
-update_player_look_ahead
-  ldy #$04                          ; set offset to facing direction part of location type row bytes, firsr one is UP, i.e. forward
-  lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get facing direction byte code ($00 = can move, $FF = can't move)
-  bne upd_plyr_look_ahead_off       ; if not $00, can't go or see forward as is a wall, set look ahead to off
-  ; set look ahead x pos
-  lda Z_PLYR_POS_X                  ; read current player x position to add to 
-  sta Z_PLYR_LOOK_AHEAD_X           ; store in look ahead x
-  lda #>data_x_movement_facing_dir  ; put high byte (page) of data x movement for new direction in addr 1
-  sta Z_ADDR_1_HIGH
-  lda #<data_x_movement_facing_dir  ; same for low byte
-  sta Z_ADDR_1_LOW
-  ldy Z_PLYR_FACING                 ; load new (and now current) player facing direction to Y for offset
-  lda (Z_ADDR_1_LOW), Y             ; get amount to move in x direction
-  sta Z_TEMP_1                      ; temp store 2 amount
-  dec Z_PLYR_LOOK_AHEAD_X           ; amount needs to be offset by -1 by dec cur value, not using negative numbers
-  lda Z_PLYR_LOOK_AHEAD_X           ; get position
-  clc                               ; clear carry flag before addition
-  adc Z_TEMP_1                      ; add amount to move x position to x position
-  sta Z_PLYR_LOOK_AHEAD_X           ; store updated position back in look ahead x
-  ; set look ahead y pos
-  lda Z_PLYR_POS_Y                  ; read current player y position to add to 
-  sta Z_PLYR_LOOK_AHEAD_Y           ; store in look ahead y
-  lda #>data_y_movement_facing_dir  ; put high byte (page) of data y movement for new direction in addr 1
-  sta Z_ADDR_1_HIGH
-  lda #<data_y_movement_facing_dir  ; same for low byte
-  sta Z_ADDR_1_LOW
-  lda (Z_ADDR_1_LOW), Y             ; get amount to move in y direction (Y is still correct from y position update)
-  sta Z_TEMP_1                      ; temp store 2 amount
-  dec Z_PLYR_LOOK_AHEAD_Y           ; amount needs to be offset by -1 by dec cur value, not using negative numbers
-  lda Z_PLYR_LOOK_AHEAD_Y           ; get position
-  clc                               ; clear carry flag before addition
-  adc Z_TEMP_1                      ; add amount to move y position to y position
-  sta Z_PLYR_LOOK_AHEAD_Y           ; store updated position back in look ahead y
-  ; TODO : read type in look ahead map location, and set low / high addr
-  lda #$FF
-  sta Z_PLYR_LOOK_AHEAD_TYPE
-  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
-  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
-  jmp upd_plyr_look_ahead_finish
-upd_plyr_look_ahead_off
-  lda #$FF
-  sta Z_PLYR_LOOK_AHEAD_TYPE
-  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
-  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
-  sta Z_PLYR_LOOK_AHEAD_X
-  sta Z_PLYR_LOOK_AHEAD_Y
-upd_plyr_look_ahead_finish
-  rts
+;==========================================================
+; ROUTINES - MAP DRAWING
+;==========================================================
 
 ; === draw_std_player_on_map
 ;   wrapper for normal draw colours of draw_player_map_pos
@@ -458,63 +612,45 @@ show_pl_facing_str_finish
   rts
 
 
-; === determine_location_type
-;   determines location type from player location and direction facing info,
-;   i.e. gets table row number in front facing info table, used in other routines and logic
-; assumptions:
-;   - player core data is correct
-;   - there are 7 rows of table data
-;   - table data does not cross page boundary
-; params:
-;   none
-; uses:
-;   A, X, Y, c
-;   Z_TEMP_1
-; side effects:
-;   none
-; returns:
-;   X and Z_PLYR_LOC_TYPE - row of location, or $FF if error
-;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH pointing at row start, or last row if error
-;   plot_xy:    A, X, Y, c, plot variables
-determine_location_type
-  ; first get character at player location
-  lda Z_PLYR_POS_X                  ; store player pos x in plot x
-  sta Z_SCR_X
-  lda Z_PLYR_POS_Y                  ; store player pos y in plot y
-  sta Z_SCR_Y
-  jsr plot_set_xy                   ; move to player pos
-  ldy #$00                          ; zero Y, for indirect mem access
-  lda (Z_SCR_LOW_BYTE), Y           ; get character at player post on map
-  sta Z_TEMP_1                      ; store char in temp storage 1
-  ; set up table scanning method
-  lda #>data_front_facing_info      ; load high byte (page) of front facing info table
-  sta Z_PLYR_LOC_TY_ADDR_HIGH       ; store in high byte of player location type addr
-  lda #<data_front_facing_info      ; load low byte of table
-  sta Z_PLYR_LOC_TY_ADDR_LOW        ; store in low byte of player location type addr
-  ldx #$00                          ; zero X, will be used to count row
-  ldy Z_PLYR_FACING
-det_loc_type_loop
-  lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get character for this facing direction (Y) and row (with addr)
-  cmp Z_TEMP_1
-  beq det_loc_type_finish           ; found, finish
-  inx                               ; otherwise X++, row to next row
-  cpx #$07                          ; check if row is on 8th row, i.e. gone past end
-  beq det_loc_type_row_err          ; if so, go to error state, exit
-  lda Z_PLYR_LOC_TY_ADDR_LOW        ; get low byte of current addr 1 ptr
-  clc                               ; clear carry flag before addition
-  adc #$08                          ; add 8 to low byte count, i.e. next row (assumes does not cross page)
-  sta Z_PLYR_LOC_TY_ADDR_LOW        ; store updated low byte address
-  jmp det_loc_type_loop
-det_loc_type_row_err
-  ldx #$FF                          ; set row to error code
-  ; TODO : remove this error handing, debug only, make fatal
-  lda #$53    ;heart char
-  jsr fill_screen_chars
-  lda #$02
-  jsr fill_screen_cols
-  jmp *
-det_loc_type_finish
-  stx Z_PLYR_LOC_TYPE
+;==========================================================
+; ROUTINES - FIRST PERSON DRAWING
+;==========================================================
+
+; === draw_two_tone_bg
+draw_two_tone_bg
+  ; fill entire colour memory (foreground) with black
+  lda #CN_COL_MEM_START_LOW
+  sta Z_ADDR_1_LOW
+  lda #CN_COL_MEM_START_HIGH
+  sta Z_ADDR_1_HIGH
+  lda #CN_COL_MEM_END_LOW
+  sta Z_ADDR_2_LOW
+  lda #CN_COL_MEM_END_HIGH
+  sta Z_ADDR_2_HIGH
+  lda #CN_COL_VAL_BLACK
+  jsr fill_mem
+  ; fill scr mem first half with blocks (makes black)
+  lda #CN_BK1_SCR_START_LOW
+  sta Z_ADDR_1_LOW
+  lda #CN_BK1_SCR_START_HIGH
+  sta Z_ADDR_1_HIGH
+  lda #CN_BK1_SCR_MIDLINE_LOW
+  sta Z_ADDR_2_LOW
+  lda #CN_BK1_SCR_MIDLINE_HIGH
+  sta Z_ADDR_2_HIGH
+  lda #CN_SPEC_CHAR_BLOCK
+  jsr fill_mem
+  ; fill scr mem first half with spaces (makes see through, i.e. bg col, i.e. light blue)
+  lda #CN_BK1_SCR_MIDLINE_LOW
+  sta Z_ADDR_1_LOW
+  lda #CN_BK1_SCR_MIDLINE_HIGH
+  sta Z_ADDR_1_HIGH
+  lda #CN_BK1_SCR_END_LOW
+  sta Z_ADDR_2_LOW
+  lda #CN_BK1_SCR_END_HIGH
+  sta Z_ADDR_2_HIGH
+  lda #CN_SPEC_CHAR_BLANK
+  jsr fill_mem
   rts
 
 ;==========================================================
@@ -523,6 +659,77 @@ det_loc_type_finish
 
 ; these routines are general and form a bespoke standard library
 
+; === init_helper_vars
+;   initialise some variables used by helper routines
+; params:
+;   none
+; uses:
+;   A
+init_helper_vars
+  lda #CN_BK0_SCR_START_LOW
+  sta Z_SCR_START_LOW
+  lda #CN_BK0_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+  rts
+
+; === enable_video_bank_selection
+;   enables video bank selection in VIC chip
+; uses:
+;   A
+enable_video_bank_selection
+  lda VIC_CIA2_DATA_DIR_A       ; read value of data direction A of CIA#2
+  ora #$03                      ; set bits 0 and 1 on
+  sta VIC_CIA2_DATA_DIR_A       ; write with video bank selection enabled
+  rts
+
+; === set_video_bank
+;   set the video bank the VIC is pointing to
+; params:
+;   A - bank to select (must be number between $00 and $03 inclusive)
+; uses:
+;   A, Z_TEMP_1
+; side effects:
+;   none
+; returns:
+;   none
+set_video_bank
+  sta Z_TEMP_1                  ; save video bank number to temp 1
+  lda VIC_CIA2_BANK_SELECT      ; read value of bank selection register
+  and #$FC                      ; mask out bits 0, 1 with AND
+  ora Z_TEMP_1                  ; set video bank by ORing against number saved in temp 1
+  sta VIC_CIA2_BANK_SELECT      ; write to video bank selection reg
+  lda Z_TEMP_1                  ; load video bank number to compare so screen start can be updated
+  cmp #CN_VID_BANK_1            ; check if bank 1
+  beq set_video_bank_1
+  cmp #CN_VID_BANK_2            ; check if bank 2
+  beq set_video_bank_2
+  cmp #CN_VID_BANK_3            ; check if bank 3
+  beq set_video_bank_3
+set_video_bank_0                ; otherwise continue to set for bank 0
+  lda #CN_BK0_SCR_START_LOW
+  sta Z_SCR_START_LOW
+  lda #CN_BK0_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+  jmp set_video_bank_finish
+set_video_bank_1                ; set for bank 1
+  lda #CN_BK1_SCR_START_LOW
+  sta Z_SCR_START_LOW
+  lda #CN_BK1_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+  jmp set_video_bank_finish
+set_video_bank_2                ; set for bank 2
+  lda #CN_BK2_SCR_START_LOW
+  sta Z_SCR_START_LOW
+  lda #CN_BK2_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+  jmp set_video_bank_finish
+set_video_bank_3                ; set for bank 3
+  lda #CN_BK3_SCR_START_LOW
+  sta Z_SCR_START_LOW
+  lda #CN_BK3_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+set_video_bank_finish
+  rts
 
 ; === wait_for_key
 ;   loop continuously until key pressed
@@ -549,13 +756,13 @@ wait_for_key
 ; side effects:
 ;   fill_mem:   A, X, Y
 fill_screen_chars
-  ldx #CN_SCR_MEM_START_LOW       ; set start / end addres in low / high for fill_mem call
+  ldx #CN_BK2_SCR_START_LOW       ; set start / end addres in low / high for fill_mem call
   stx Z_ADDR_1_LOW
-  ldx #CN_SCR_MEM_START_HIGH
+  ldx #CN_BK2_SCR_START_HIGH
   stx Z_ADDR_1_HIGH
-  ldx #CN_SCR_MEM_END_LOW
+  ldx #CN_BK2_SCR_END_LOW
   stx Z_ADDR_2_LOW
-  ldx #CN_SCR_MEM_END_HIGH
+  ldx #CN_BK2_SCR_END_HIGH
   stx Z_ADDR_2_HIGH
   jsr fill_mem                    ; call fill mem, A already set by caller of this routine
   rts
@@ -588,10 +795,10 @@ fill_screen_cols
 ;     about 7668 cycles better (including jsr and rts, but not unrolled check)
 ;   you can comment out everything between the speed code tags and this will work fine without it.
 ; assumptions:
-;   there is at least one byte to copy, if addr 1 == addr 2 entirely, this routine with have undefined results
+;   there is at least one byte to write, if addr 1 == addr 2 entirely, this routine with have undefined results
 ; params:
 ;   Z_ADDR_1_HIGH / LOW - from memory location (inclusive)
-;   Z_ADDR_2_HIGH / LOW - to memory location (inclusive)
+;   Z_ADDR_2_HIGH / LOW - to memory location (exclusive)
 ;   A - byte to fill
 ; uses:
 ;   A, X, Y
@@ -626,11 +833,50 @@ fill_mem_check_high
   beq fill_mem_check_low    ; if match (we're in last page) then go to check low byte for match
   jmp fill_mem_loop         ; otherwise still more bytes, loop
 fill_mem_check_low
-  lda Z_ADDR_1_LOW          ; load high byte mem addr
+  lda Z_ADDR_1_LOW          ; load low byte current mem addr
   cmp Z_ADDR_2_LOW          ; check against ending high byte (only reaches here if high byte already matched)
   beq fill_mem_finish       ; if match then we're done, finish
   jmp fill_mem_loop         ; otherwise still more bytes, loop
 fill_mem_finish
+  rts
+
+
+; === copy_map_chars_to_screen
+;   map copy routine from stored memory location to screen, characters only, does not set any colour map data
+; assumptions:
+;   there is at least one byte to write, if addr 1 == addr 2 entirely, this routine with have undefined results
+; params:
+;   Z_ADDR_1_HIGH / LOW - from memory location (inclusive) to write to
+;   Z_ADDR_2_HIGH / LOW - to memory location (exclusive) to write to
+;   Z_ADDR_3_HIGH / LOW - start memory location (inclusive) for reading
+;   A - byte to fill
+; uses:
+;   A, X, Y
+; side effects:
+;   none
+copy_mem
+  ldy #$00                  ; zero Y register
+copy_mem_loop
+  lda (Z_ADDR_3_LOW), Y     ; read byte from source
+  sta (Z_ADDR_1_LOW), Y     ; store byte to fill in next address
+  inc Z_ADDR_3_LOW          ; next mem addr (read from), low byte
+  inc Z_ADDR_1_LOW          ; next mem addr (write to), low byte
+  lda Z_ADDR_1_LOW          ; load low byte mem addr (automatically checks for zero)
+  bne copy_mem_check_high   ; if not zero, go to high byte check
+copy_mem_paged
+  inc Z_ADDR_1_HIGH         ; increase high byte of write to addr
+  inc Z_ADDR_3_HIGH         ; increase high byte of read from addr
+copy_mem_check_high
+  lda Z_ADDR_1_HIGH         ; load high byte mem addr
+  cmp Z_ADDR_2_HIGH         ; check against ending high byte
+  beq copy_mem_check_low    ; if match (we're in last page) then go to check low byte for match
+  jmp copy_mem_loop         ; otherwise still more bytes, loop
+copy_mem_check_low
+  lda Z_ADDR_1_LOW          ; load low byte current mem addr
+  cmp Z_ADDR_2_LOW          ; check against ending high byte (only reaches here if high byte already matched)
+  beq copy_mem_finish       ; if match then we're done, finish
+  jmp copy_mem_loop         ; otherwise still more bytes, loop
+copy_mem_finish
   rts
 
 
@@ -694,24 +940,6 @@ draw_chars_list_wc_next
   rts                       ; otherwise, done, finish
 
 
-; === set_screen_bg_cols
-; black main screen, dark grey border
-; params:
-;   none
-; uses:
-;   A
-; side effects:
-;   none
-set_screen_bg_cols
-  pha
-  lda #$0B
-  sta $D020
-  lda #$00
-  sta $D021
-  pla
-  rts
-
-
 ; === plot_set_xy
 ;   sets screen draw xy position, including color map position
 ; params:
@@ -725,9 +953,9 @@ set_screen_bg_cols
 plot_set_xy
   ldx Z_SCR_X                           ; get x position from zero page var to X
   ldy Z_SCR_Y                           ; get y position from zero page var to Y
-  lda #$04                              ; load high byte of screen start in A
+  lda Z_SCR_START_HIGH                  ; load high byte of screen start in A
   sta Z_SCR_HI_BYTE                     ; store in zero page
-  lda #$D8                              ; load high byte of color map start in A
+  lda #CN_COL_MEM_START_HIGH            ; load high byte of color map start in A
   sta Z_COL_HI_BYTE                     ; store in zero page
 set_last_xy_complex_add
   lda #$00                              ; zero A, will track low byte of address until end of routine
@@ -1505,7 +1733,7 @@ sub_fill_mem_unrolled_page
   rts
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_routines   ; = $1673 in this version
+debug_label_end_of_routines   ; = $1740 in this version
 
 
 ;==========================================================
@@ -1515,7 +1743,7 @@ debug_label_end_of_routines   ; = $1673 in this version
 ; NOTE: lists always start with the length of the list (which should be +1 size of list, to include size byte),
 ;       followed by the values
 
-* = $5000
+* = $3000
 
 data_map_chars_list
 ; len 14, then 14 chars of data
@@ -1563,8 +1791,6 @@ data_y_movement_facing_dir
 ; strings are character lists, starting with list size NOT INCLUDING this byte
 ; this makes the max char list size 254
 
-* = $5100
-
 data_str_page_1
 data_str_pg1_facing_north
 !byte $0C
@@ -1579,12 +1805,45 @@ data_str_pg1_facing_west
 !byte $0C
 !scr "facing west "
 
+; this label is just here to easily see what the last address of routines is, for memory calculations
+debug_label_end_of_tables_strings   ; = $3097 in this version
+
 ;==========================================================
-; IMAGE DATA
+; SCREEN COPY
 ;==========================================================
 
-* = $6000
+; used directly as screen location when video bank 0 (default) selected
+; this is just for a little visual glitch effect when the same starts
+* = $0400
+data_scr_glyph_is_a_glitch
+!byte 32,32,32,12,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,7,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,15,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,14
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,1,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,9,32,32,32,32,32,32,32
+!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,4,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
 
+; used directly in video bank 2 (actually used in game)
+* = $8400
 data_scr_map
 !byte 112,113,110,109,115,112,64,64,64,114,110,112,64,64,110,109,110,112,64,64,64,125,109,64,115,112,113,110,112,113,110,112,67,67,67,110,112,114,110,66
 !byte 109,110,66,112,91,125,112,64,114,113,115,109,64,110,107,64,91,125,111,111,111,111,111,111,109,115,112,125,66,112,115,66,112,64,114,113,125,66,66,66
@@ -1611,3 +1870,19 @@ data_scr_map
 !byte 107,110,112,113,64,115,112,64,64,110,109,110,119,119,119,119,119,119,112,91,125,66,107,110,119,119,119,119,119,119,112,125,66,107,115,112,110,107,91,115
 !byte 107,91,125,112,110,66,66,112,64,125,112,115,112,64,110,112,114,64,115,107,110,109,91,91,114,110,112,64,114,110,107,114,91,113,125,107,91,125,107,125
 !byte 125,109,114,125,109,125,66,109,64,64,125,109,125,112,113,125,109,110,109,125,109,64,125,109,113,113,125,112,125,109,125,66,109,64,64,125,109,64,125,112
+
+
+;==========================================================
+; CHARACTER SET COPY
+;==========================================================
+
+* = $5000
+
+!byte $00,$00,$00,$00,$00,$00,$00,$00   ; blank
+!byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; block
+
+;==========================================================
+; IMAGE DATA
+;==========================================================
+
+; none yet
