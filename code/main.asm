@@ -11,11 +11,16 @@
 ; Video bank 1 $4000 - $7FFF is used for first person mode
 ; Video bank 2 $8000 - $BFFF is used for map mode
 ;
-; $1000 - $2000   : main code and routines
-; $3000 - $3200   : tables and data
-; $4400 - $47FF   : screen for first person mode (bank 1)
-; $5000 - $57FF   : character map for first person (bank 1) written directly by loader
-; $8400 - $87FF   : screen for map mode (bank 2) written to directly by loader
+; zero page
+;   $0000 - $0001   : reserved
+;   $0002 - $007F   : general purpose
+;   $0080 - $00FF   : transferred tables
+; $1000 - $2000     : main code and routines
+; $3000 - $3200     : game logic tables and data, and strings
+; $4400 - $47FF     : screen for first person mode (bank 1)
+; $5000 - $57FF     : character map for first person (bank 1) written directly by loader
+; $7000 - $72FF     ; first person drawing data tables
+; $8400 - $87FF     : screen for map mode (bank 2) written to directly by loader
 ; 
 ;==========================================================
 
@@ -148,10 +153,11 @@ Z_TEMP_1          = $18
 Z_TEMP_2          = $19
 Z_TEMP_3          = $1A
 Z_TEMP_4          = $1B
+Z_TEMP_5          = $1C
 
-Z_PSH_REG_A       = $1C
-Z_PSH_REG_X       = $1D
-Z_PSH_REG_Y       = $1E
+Z_PSH_REG_A       = $1D
+Z_PSH_REG_X       = $1E
+Z_PSH_REG_Y       = $1F
 
 ; working vars for specific routines
 Z_BYTE_MATCH_LOW        = $20
@@ -173,6 +179,9 @@ Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW   = $47   ; low byte of addr of start of row of lo
 Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH  = $48   ; high byte ^ same
 Z_PLYR_LOOK_AHEAD_X     = $49     ; x pos of look ahead to next location, $FF if wall ahead (convinence)
 Z_PLYR_LOOK_AHEAD_Y     = $4A     ; y pos of ^ same
+
+; lookup tables
+Z_TABLE_START           = $80     ; not yet used, but possible idea
 
 
 ;==========================================================
@@ -213,7 +222,7 @@ start_init_player_data
   sta Z_PLYR_FACING
 start_enter_screen
   jmp start_first_person
-  ; NOTE - in this version map is unreachable
+  ; NOTE - in this version the map is unreachable
 ;*** map mode
 start_map
   lda #CN_VID_BANK_2                    ; load code for video bank 2
@@ -256,7 +265,8 @@ start_first_person
   sta VIC_BG_COL
 first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
-  jsr special_char_test                 ; character test of all special characters for bank 1
+  ;jsr special_char_test                 ; character test of all special characters for bank 1
+  jsr draw_left_long_corridor           ; test drawing long corridor
 unreachable_infinite_loop
   jmp *
 
@@ -669,6 +679,73 @@ special_char_test_loop
   cpy #$13
   bne special_char_test_loop
   rts
+
+
+; === draw_left_long_corridor
+;   draw long left corridor
+draw_left_long_corridor
+  lda #<data_corridor_double_long_left
+  sta Z_ADDR_1_LOW
+  lda #>data_corridor_double_long_left
+  sta Z_ADDR_1_HIGH
+  jsr draw_from_tables
+  rts
+
+
+; === draw_from_tables
+;   draw from specific draw table formatted table
+; assumptions:
+;   table follows format: (char,col,len),[(x0,y0),(x1,y2),...,(xn,yn)],...,$00
+; params:
+;   Z_ADDR_1_LOW / HIGH - set to table start
+; uses:
+;   A, X, Y
+;   Z_TEMP_1 / 2 / 3 / 4 / 5
+; side effects:
+;   plot_set_xy: A, X, Y, plot variables
+; returns:
+;   none
+draw_from_tables
+  ldy #$00                    ; zero Y for indirect addressing _within_ zero page
+draw_from_tab_section
+  lda (Z_ADDR_1_LOW), Y       ; get draw character from table
+  beq draw_from_tab_finish    ; if A == $00 then finished
+  sta Z_TEMP_1                ; store draw character in temp 1
+  iny                         ; Y++
+  lda (Z_ADDR_1_LOW), Y       ; get character colour from table
+  sta Z_TEMP_2                ; store col in temp 2
+  iny                         ; Y++
+  lda (Z_ADDR_1_LOW), Y       ; get data length from table, store in X
+  sta Z_TEMP_5                ; store len of (x,y) pairs in temp 5
+  iny                         ; Y++
+  lda #$00
+  sta Z_TEMP_4                ; store (x,y) pair counter (init to 0) in temp 4
+draw_from_tab_loop
+  lda (Z_ADDR_1_LOW), Y       ; get character colour from table
+  sta Z_SCR_X                 ; store x from table in scr x var
+  iny                         ; Y++
+  lda (Z_ADDR_1_LOW), Y       ; get character colour from table
+  sta Z_SCR_Y                 ; store y from table in scr y var
+  iny                         ; Y++
+  sty Z_TEMP_3                ; store Y in temp 3, is altered in plot_set_xy routine
+  jsr plot_set_xy             ; update screen and col map pointing addresses
+  ldy #$00                    ; zero Y to store char in scr mem
+  lda Z_TEMP_1                ; load draw char
+  sta (Z_SCR_LOW_BYTE), Y     ; store char in scr mem
+  lda Z_TEMP_2                ; load col
+  sta (Z_COL_LOW_BYTE), Y     ; store char in scr mem
+  ldy Z_TEMP_3                ; load previously stored Y index
+  inc Z_TEMP_4                ; increase (x,y) pair counter + 1
+  lda Z_TEMP_4                ; load current (x,y) pair counter
+  cmp Z_TEMP_5                ; check if counter has reached length
+  beq draw_from_tab_section   ; finished seciton, check if one next
+  jmp draw_from_tab_loop      ; otherwise get next (x,y) pair (Y already on next read position)
+draw_from_tab_finish
+  rts
+
+
+
+
 
 
 ;==========================================================
@@ -1217,6 +1294,33 @@ restore_registers
   lda Z_PSH_REG_A
   ldx Z_PSH_REG_X
   ldy Z_PSH_REG_Y
+  rts
+
+
+; TODO!!! : this has not been tested
+; === load_z_tables
+;   load tables from memory into zero page tables for further use
+; assumptions:
+;   table ends with $00
+; params:
+;   Z_ADDR_1_LOW / HIGH - start of memory area to transfer to zero page
+; uses:
+;   X, Y
+;   Z_TEMP_1
+; side effects:
+;   none
+; return value:
+;   none
+load_z_tables
+  ldy #$00                  ; zero Y, used in indirect addressing
+load_z_tables_loop
+  ldx Z_ADDR_1_LOW, Y     ; load next byte
+  beq load_z_tables_finish  ; if $00 then finish
+  stx Z_TABLE_START, Y    ; store byte in zero table
+  iny                       ; Y++, next byte position
+  jmp load_z_tables_loop    ; continue loop
+load_z_tables_finish
+  stx Z_TABLE_START, Y    ; store ending $00 in zero table
   rts
 
 
@@ -1915,6 +2019,49 @@ data_scr_map
 !byte $00,$00,$FF,$FF,$FF,$FF,$FF,$FF   ; $10 - bottom side almost block
 !byte $FC,$F8,$F0,$E0,$C4,$8C,$1C,$3C   ; $11 - top right filled diagonal half and bottom right sided island
 !byte $3F,$1F,$0F,$07,$23,$31,$38,$3C   ; $12 - top left filled diagonal half and bottom left sided island
+
+;==========================================================
+; DRAW INSTRUCTIONS
+;==========================================================
+
+* = $7000
+
+; double long left side corridor
+data_corridor_double_long_left
+; top row, main line
+;    char col len
+!byte $07,$00,$0B
+!byte $08,$00,$09,$01,$0A,$02,$0B,$03,$0C,$04,$0D,$05,$0E,$06,$0F,$07,$10,$08,$11,$09,$12,$0A
+; top row, bottom side patch up
+!byte $0A,$00,$0B
+!byte $07,$00,$08,$01,$09,$02,$0A,$03,$0B,$04,$0C,$05,$0D,$06,$0E,$07,$0F,$08,$10,$09,$11,$0A
+; top row, top side patch up
+!byte $08,$00,$0A
+!byte $09,$00,$0A,$01,$0B,$02,$0C,$03,$0D,$04,$0E,$05,$0F,$06,$10,$07,$11,$08,$12,$09
+; wall right side
+!byte $0C,$00,$02
+!byte $12,$0B,$12,$0C
+; floor border
+!byte $03,$02,$0B
+!byte $12,$0E,$11,$0F,$10,$10,$0F,$11,$0E,$12,$0D,$13,$0C,$14,$0B,$15,$0A,$16,$09,$17,$08,$18
+; floor
+!byte $01,$02,$42
+!byte $13,$0E
+!byte $12,$0F,$13,$0F
+!byte $11,$10,$12,$10,$13,$10
+!byte $10,$11,$11,$11,$12,$11,$13,$11
+!byte $0F,$12,$10,$12,$11,$12,$12,$12,$13,$12
+!byte $0E,$13,$0F,$13,$10,$13,$11,$13,$12,$13,$13,$13
+!byte $0D,$14,$0E,$14,$0F,$14,$10,$14,$11,$14,$12,$14,$13,$14
+!byte $0C,$15,$0D,$15,$0E,$15,$0F,$15,$10,$15,$11,$15,$12,$15,$13,$15
+!byte $0B,$16,$0C,$16,$0D,$16,$0E,$16,$0F,$16,$10,$16,$11,$16,$12,$16,$13,$16
+!byte $0A,$17,$0B,$17,$0C,$17,$0D,$17,$0E,$17,$0F,$17,$10,$17,$11,$17,$12,$17,$13,$17
+!byte $09,$18,$0A,$18,$0B,$18,$0C,$18,$0D,$18,$0E,$18,$0F,$18,$10,$18,$11,$18,$12,$18,$13,$18
+; hall end
+!byte $01,$00,$01
+!byte $13,$0D
+; END, null terminated
+!byte $00
 
 ;==========================================================
 ; IMAGE DATA
