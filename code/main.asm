@@ -266,6 +266,7 @@ start_first_person
 first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
   ;jsr special_char_test                 ; character test of all special characters for bank 1
+  ;jsr wait_for_key
   jsr draw_left_long_corridor           ; test drawing long corridor
 unreachable_infinite_loop
   jmp *
@@ -695,7 +696,7 @@ draw_left_long_corridor
 ; === draw_from_tables
 ;   draw from specific draw table formatted table
 ; assumptions:
-;   table follows format: (char,col,len),[(x0,y0),(x1,y2),...,(xn,yn)],...,$00
+;   table follows format, see DRAW INSTRUCTIONS data section notes
 ; params:
 ;   Z_ADDR_1_LOW / HIGH - set to table start
 ; uses:
@@ -706,8 +707,8 @@ draw_left_long_corridor
 ; returns:
 ;   none
 draw_from_tables
-  ldy #$00                    ; zero Y for indirect addressing _within_ zero page
 draw_from_tab_section
+  ldy #$00                    ; zero Y for indirect addressing
   lda (Z_ADDR_1_LOW), Y       ; get draw character from table
   beq draw_from_tab_finish    ; if A == $00 then finished
   sta Z_TEMP_1                ; store draw character in temp 1
@@ -716,30 +717,61 @@ draw_from_tab_section
   sta Z_TEMP_2                ; store col in temp 2
   iny                         ; Y++
   lda (Z_ADDR_1_LOW), Y       ; get data length from table, store in X
-  sta Z_TEMP_5                ; store len of (x,y) pairs in temp 5
+  sta Z_TEMP_3                ; store total number of chars to write in temp 3
   iny                         ; Y++
-  lda #$00
-  sta Z_TEMP_4                ; store (x,y) pair counter (init to 0) in temp 4
-draw_from_tab_loop
+  ; set pointers to first character
   lda (Z_ADDR_1_LOW), Y       ; get character colour from table
   sta Z_SCR_X                 ; store x from table in scr x var
   iny                         ; Y++
   lda (Z_ADDR_1_LOW), Y       ; get character colour from table
   sta Z_SCR_Y                 ; store y from table in scr y var
-  iny                         ; Y++
-  sty Z_TEMP_3                ; store Y in temp 3, is altered in plot_set_xy routine
   jsr plot_set_xy             ; update screen and col map pointing addresses
-  ldy #$00                    ; zero Y to store char in scr mem
+  lda Z_SCR_LOW_BYTE          ; copy screen ptr low/high addr to temp addr 2
+  sta Z_ADDR_2_LOW
+  lda Z_SCR_HI_BYTE
+  sta Z_ADDR_2_HIGH
+  lda Z_COL_LOW_BYTE          ; copy col map ptr low/high addr to temp addr 3
+  sta Z_ADDR_3_LOW
+  lda Z_COL_HI_BYTE
+  sta Z_ADDR_3_HIGH
+  ; update addr 1, tracking on table
+  lda Z_ADDR_1_LOW            ; get low address, will add head so points at byte offsets
+  clc                         ; clear carry flag before addition
+  adc #$05                    ; add $05 to low byte, to move to past section header
+  sta Z_ADDR_1_LOW            ; store result (doesn't affect carry flag)
+  bcc draw_from_tab_skip      ; if did not cross page boundary, continue to loop setup
+  inc Z_ADDR_1_HIGH           ; otherwise add one to high byte (page)
+draw_from_tab_skip
+  ldy #$00                    ; zero Y, tracks offset in table
+  sty Z_TEMP_4                ; store in temp 4
+draw_from_tab_loop
+  ldy #$00                    ; zero Y for indirect write, offset not used here
   lda Z_TEMP_1                ; load draw char
-  sta (Z_SCR_LOW_BYTE), Y     ; store char in scr mem
+  sta (Z_ADDR_2_LOW), Y       ; store char in screen
   lda Z_TEMP_2                ; load col
-  sta (Z_COL_LOW_BYTE), Y     ; store char in scr mem
-  ldy Z_TEMP_3                ; load previously stored Y index
-  inc Z_TEMP_4                ; increase (x,y) pair counter + 1
-  lda Z_TEMP_4                ; load current (x,y) pair counter
-  cmp Z_TEMP_5                ; check if counter has reached length
-  beq draw_from_tab_section   ; finished seciton, check if one next
+  sta (Z_ADDR_3_LOW), Y       ; store col in col mem
+  ldy Z_TEMP_4                ; restore table offset in Y
+  cpy Z_TEMP_3                ; check if counter has reached end of offsets (will be $00 if no offsets)
+  beq draw_from_tab_sec_end   ; finished seciton, check if one next
+  lda (Z_ADDR_1_LOW), Y       ; get next draw loc offset
+  iny                         ; increase pointer to next table offset byte
+  sty Z_TEMP_4                ; store next table offset byte offset in temp 4
+  clc                         ; clear carry flag before addition
+  adc Z_ADDR_2_LOW            ; add address low byte to offset
+  sta Z_ADDR_2_LOW            ; store result in addr 2 low byte (char scr) doesn't affect carry flag
+  sta Z_ADDR_3_LOW            ; store in addr 3 (col map), tracks the same on low byte
+  bcc draw_from_tab_loop      ; if didn't cross page boundary, continue
+  inc Z_ADDR_2_HIGH           ; otherwise next char scr page
+  inc Z_ADDR_3_HIGH           ; same, next col mem page
   jmp draw_from_tab_loop      ; otherwise get next (x,y) pair (Y already on next read position)
+draw_from_tab_sec_end
+  tya                         ; Y -> A, has number of offset bytes here
+  clc                         ; clear carry flag before addition
+  adc Z_ADDR_1_LOW            ; add offset bytes to low byte of base table pointer addr (1)
+  sta Z_ADDR_1_LOW            ; save result of add in addr 1 low, note does not affect carry flag checked in next operation
+  bcc draw_from_tab_section   ; if didn't cross page boundary, continue to check for next section
+  inc Z_ADDR_1_HIGH           ; otherwise add 1 to page (high byte)
+  jmp draw_from_tab_section   ; then continue to check for next section
 draw_from_tab_finish
   rts
 
@@ -2024,41 +2056,57 @@ data_scr_map
 ; DRAW INSTRUCTIONS
 ;==========================================================
 
+; Draw instructions follow a special format, split into sections, and terminated by a $00
+; For each section:
+;   first three bytes:    character, colour, number of offset bytes ONLY
+;   4th and 5th btyes:    (x,y) of starting position on screen
+;   next bytes:           each byte is the byte offset to the next character to draw, e.g. $28 (40) is y+1, the next row
+;
+; Notes
+; 1. If only one byte to draw, no next bytes.
+; 2. The byte offset cannot be negative, so the draw order needs to be from top to bottom, and left to right within a row.
+; 3. The byte offset cannot be greater than $FF, so if there's a larger gap it needs to be split into a separate section.
+
 * = $7000
 
 ; double long left side corridor
 data_corridor_double_long_left
 ; top row, main line
 ;    char col len
-!byte $07,$00,$0B
-!byte $08,$00,$09,$01,$0A,$02,$0B,$03,$0C,$04,$0D,$05,$0E,$06,$0F,$07,$10,$08,$11,$09,$12,$0A
+!byte $07,$00,$0A
+!byte $08,$00      ; <- starting (x,y)
+!byte $29,$29,$29,$29,$29,$29,$29,$29,$29,$29     ; <- offsets (in bytes) for 2nd to 11th character to write
 ; top row, bottom side patch up
-!byte $0A,$00,$0B
-!byte $07,$00,$08,$01,$09,$02,$0A,$03,$0B,$04,$0C,$05,$0D,$06,$0E,$07,$0F,$08,$10,$09,$11,$0A
+!byte $0A,$00,$0A
+!byte $07,$00
+!byte $29,$29,$29,$29,$29,$29,$29,$29,$29,$29
 ; top row, top side patch up
-!byte $08,$00,$0A
-!byte $09,$00,$0A,$01,$0B,$02,$0C,$03,$0D,$04,$0E,$05,$0F,$06,$10,$07,$11,$08,$12,$09
+!byte $08,$00,$09
+!byte $09,$00
+!byte $29,$29,$29,$29,$29,$29,$29,$29,$29
 ; wall right side
-!byte $0C,$00,$02
-!byte $12,$0B,$12,$0C
+!byte $0C,$00,$01
+!byte $12,$0B
+!byte $28
 ; floor border
-!byte $03,$02,$0B
-!byte $12,$0E,$11,$0F,$10,$10,$0F,$11,$0E,$12,$0D,$13,$0C,$14,$0B,$15,$0A,$16,$09,$17,$08,$18
+!byte $03,$02,$0A
+!byte $12,$0E
+!byte $27,$27,$27,$27,$27,$27,$27,$27,$27,$27
 ; floor
-!byte $01,$02,$42
+!byte $01,$02,$41
 !byte $13,$0E
-!byte $12,$0F,$13,$0F
-!byte $11,$10,$12,$10,$13,$10
-!byte $10,$11,$11,$11,$12,$11,$13,$11
-!byte $0F,$12,$10,$12,$11,$12,$12,$12,$13,$12
-!byte $0E,$13,$0F,$13,$10,$13,$11,$13,$12,$13,$13,$13
-!byte $0D,$14,$0E,$14,$0F,$14,$10,$14,$11,$14,$12,$14,$13,$14
-!byte $0C,$15,$0D,$15,$0E,$15,$0F,$15,$10,$15,$11,$15,$12,$15,$13,$15
-!byte $0B,$16,$0C,$16,$0D,$16,$0E,$16,$0F,$16,$10,$16,$11,$16,$12,$16,$13,$16
-!byte $0A,$17,$0B,$17,$0C,$17,$0D,$17,$0E,$17,$0F,$17,$10,$17,$11,$17,$12,$17,$13,$17
-!byte $09,$18,$0A,$18,$0B,$18,$0C,$18,$0D,$18,$0E,$18,$0F,$18,$10,$18,$11,$18,$12,$18,$13,$18
+!byte $27,$01
+!byte $26,$01,$01
+!byte $25,$01,$01,$01
+!byte $24,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01
+!byte $22,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1E,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
 ; hall end
-!byte $01,$00,$01
+!byte $01,$00,$00
 !byte $13,$0D
 ; END, null terminated
 !byte $00
