@@ -685,9 +685,15 @@ special_char_test_loop
 ; === draw_left_long_corridor
 ;   draw long left corridor
 draw_left_long_corridor
-  lda #<data_corridor_double_long_left
+  lda #<data_corridor_right_exit_near_and_far_left
   sta Z_ADDR_1_LOW
-  lda #>data_corridor_double_long_left
+  lda #>data_corridor_right_exit_near_and_far_left
+  sta Z_ADDR_1_HIGH
+  jsr draw_from_tables
+  ;
+  lda #<data_corridor_right_exit_near_and_far_right
+  sta Z_ADDR_1_LOW
+  lda #>data_corridor_right_exit_near_and_far_right
   sta Z_ADDR_1_HIGH
   jsr draw_from_tables
   rts
@@ -701,7 +707,10 @@ draw_left_long_corridor
 ;   Z_ADDR_1_LOW / HIGH - set to table start
 ; uses:
 ;   A, X, Y
-;   Z_TEMP_1 / 2 / 3 / 4 / 5
+;   Z_TEMP_1 / 2 / 3 / 4
+;   Z_ADDR_1_LOW / HIGH
+;   Z_ADDR_2_LOW / HIGH
+;   Z_ADDR_3_LOW / HIGH
 ; side effects:
 ;   plot_set_xy: A, X, Y, plot variables
 ; returns:
@@ -774,7 +783,6 @@ draw_from_tab_sec_end
   jmp draw_from_tab_section   ; then continue to check for next section
 draw_from_tab_finish
   rts
-
 
 
 
@@ -2108,6 +2116,370 @@ data_corridor_double_long_left
 ; hall end
 !byte $01,$00,$00
 !byte $13,$0D
+; END, null terminated
+!byte $00
+
+; double long right side corridor
+data_corridor_double_long_right
+; top row, main line
+;    char col len
+!byte $06,$00,$0A
+!byte $1F,$00
+!byte $27,$27,$27,$27,$27,$27,$27,$27,$27,$27
+; top row, bottom side patch up
+!byte $0B,$00,$0A
+!byte $20,$00
+!byte $27,$27,$27,$27,$27,$27,$27,$27,$27,$27
+; top row, top side patch up
+!byte $09,$00,$09
+!byte $1E,$00
+!byte $27,$27,$27,$27,$27,$27,$27,$27,$27
+; wall right side
+!byte $0D,$00,$01
+!byte $15,$0B
+!byte $28
+; floor border
+!byte $05,$02,$0A
+!byte $15,$0E
+!byte $29,$29,$29,$29,$29,$29,$29,$29,$29,$29
+; floor
+!byte $01,$02,$41
+!byte $14,$0E
+!byte $28,$01
+!byte $27,$01,$01
+!byte $26,$01,$01,$01
+!byte $25,$01,$01,$01,$01
+!byte $24,$01,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01,$01
+!byte $22,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; hall end
+!byte $01,$00,$00
+!byte $14,$0D
+; END, null terminated
+!byte $00
+
+data_corridor_right_exit_near_left
+; top row, main line
+!byte $07,$00,$04
+!byte $07,$00
+!byte $29,$29,$29,$29
+; top row, bottom side patch up
+!byte $0A,$00,$04
+!byte $06,$00
+!byte $29,$29,$29,$29
+; top row, top side patch up
+!byte $08,$00,$03
+!byte $08,$00
+!byte $29,$29,$29
+; top row, far top section
+!byte $07,$00,$02
+!byte $10,$08
+!byte $29,$29
+; top row, far bottom side patch up
+!byte $0A,$00,$01
+!byte $10,$09
+!byte $29
+; top row, far top side patch up
+!byte $08,$00,$02
+!byte $10,$07
+!byte $29,$29
+; left turn wall join
+!byte $12,$00,$00
+!byte $0F,$07
+; left turn wall top
+!byte $10,$00,$02
+!byte $0C,$07
+!byte $01,$01
+; left turn wall left side
+!byte $0D,$00,$04
+!byte $0F,$08
+!byte $28,$28,$28,$28
+; left turn wall right side
+!byte $0C,$00,$07
+!byte $0B,$05
+!byte $28,$28,$28,$28,$28,$28,$28
+; wall front left side
+!byte $0C,$00,$01
+!byte $12,$0B
+!byte $28
+; left turn wall flat
+!byte $01,$06,$0E
+!byte $0C,$0D
+!byte $01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01
+; floor border far side and near side
+!byte $03,$02,$07
+!byte $12,$0E
+!byte $27,$27,$27,$9C,$27,$27,$27
+!byte $01,$02,$47
+!byte $13,$0E
+!byte $27,$01
+!byte $26,$01,$01
+!byte $25,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1E,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; hall end
+!byte $01,$00,$00
+!byte $13,$0D
+; END, null terminated
+!byte $00
+
+data_corridor_right_exit_near_right
+; top row, main line
+!byte $06,$00,$04
+!byte $20,$00
+!byte $27,$27,$27,$27
+; top row, bottom side patch up
+!byte $0B,$00,$04
+!byte $21,$00
+!byte $27,$27,$27,$27
+; top row, top side patch up
+!byte $09,$00,$03
+!byte $1F,$00
+!byte $27,$27,$27
+; top row, far top section
+!byte $06,$00,$02
+!byte $17,$08
+!byte $27,$27
+; top row, far bottom side patch up
+!byte $0B,$00,$01
+!byte $17,$09
+!byte $27
+; top row, far top side patch up
+!byte $09,$00,$02
+!byte $17,$07
+!byte $27,$27
+; right turn wall join
+!byte $11,$00,$00
+!byte $18,$07
+; right turn wall top
+!byte $10,$00,$02
+!byte $19,$07
+!byte $01,$01
+; right turn wall left side
+!byte $0C,$00,$04
+!byte $18,$08
+!byte $28,$28,$28,$28
+; right turn wall right side
+!byte $0D,$00,$07
+!byte $1C,$05
+!byte $28,$28,$28,$28,$28,$28,$28
+; wall front right side
+!byte $0D,$00,$01
+!byte $15,$0B
+!byte $28
+; right turn wall flat
+!byte $01,$06,$0E
+!byte $19,$0D
+!byte $01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01
+; floor border far side and near side
+!byte $05,$02,$07
+!byte $15,$0E
+!byte $29,$29,$29,$A4,$29,$29,$29
+; floor
+!byte $01,$02,$47
+!byte $14,$0E
+!byte $28,$01
+!byte $27,$01,$01
+!byte $26,$01,$01,$01
+!byte $25,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; hall end
+!byte $01,$00,$00
+!byte $14,$0D
+; END, null terminated
+!byte $00
+
+; ---
+
+data_corridor_right_exit_near_and_far_left
+; top row, main line
+!byte $07,$00,$04
+!byte $07,$00
+!byte $29,$29,$29,$29
+; top row, bottom side patch up
+!byte $0A,$00,$04
+!byte $06,$00
+!byte $29,$29,$29,$29
+; top row, top side patch up
+!byte $08,$00,$03
+!byte $08,$00
+!byte $29,$29,$29
+; top row, far top section
+!byte $07,$00,$00
+!byte $10,$08
+; top row, far bottom side patch up
+!byte $0A,$00,$00
+!byte $10,$09
+; top row, far top side patch up
+!byte $08,$00,$00
+!byte $10,$07
+
+; left turn wall right side
+!byte $0C,$00,$03
+!byte $10,$09
+!byte $28,$28,$28
+
+; left turn wall join
+!byte $12,$00,$00
+!byte $0F,$07
+; left turn wall top
+!byte $10,$00,$02
+!byte $0C,$07
+!byte $01,$01
+; left turn wall left side
+!byte $0D,$00,$04
+!byte $0F,$08
+!byte $28,$28,$28,$28
+; left turn wall right side
+!byte $0C,$00,$07
+!byte $0B,$05
+!byte $28,$28,$28,$28,$28,$28,$28
+
+; wall front left side
+!byte $12,$00,$00
+!byte $12,$0B
+; wall front left side
+!byte $10,$00,$00
+!byte $11,$0B
+; wall front left side
+!byte $0E,$00,$00
+!byte $12,$0C
+; right turn wall flat
+!byte $01,$06,$01
+!byte $11,$0D
+!byte $28
+
+; left turn wall right side
+!byte $0C,$00,$07
+!byte $0B,$05
+!byte $28,$28,$28,$28,$28,$28,$28
+
+; left turn wall flat
+!byte $01,$06,$0E
+!byte $0C,$0D
+!byte $01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01
+; floor border far side and near side
+!byte $03,$02,$07
+!byte $12,$0E
+!byte $27,$27,$27,$9C,$27,$27,$27
+
+!byte $01,$02,$48
+!byte $13,$0E
+!byte $26,$01,$01
+!byte $26,$01,$01
+!byte $25,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1E,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; hall end
+!byte $01,$00,$00
+!byte $13,$0D
+; END, null terminated
+!byte $00
+
+
+data_corridor_right_exit_near_and_far_right
+; top row, main line
+!byte $06,$00,$04
+!byte $20,$00
+!byte $27,$27,$27,$27
+; top row, bottom side patch up
+!byte $0B,$00,$04
+!byte $21,$00
+!byte $27,$27,$27,$27
+; top row, top side patch up
+!byte $09,$00,$03
+!byte $1F,$00
+!byte $27,$27,$27
+; top row, middle top section
+!byte $06,$00,$00
+!byte $17,$08
+; top row, far bottom side patch up
+!byte $0B,$00,$00
+!byte $17,$09
+; top row, far top side patch up
+!byte $09,$00,$00
+!byte $17,$07
+; right turn wall join
+!byte $11,$00,$00
+!byte $18,$07
+; right turn wall top
+!byte $10,$00,$02
+!byte $19,$07
+!byte $01,$01
+; right turn wall left side
+!byte $0C,$00,$04
+!byte $18,$08
+!byte $28,$28,$28,$28
+; right turn wall right side
+!byte $0D,$00,$07
+!byte $1C,$05
+!byte $28,$28,$28,$28,$28,$28,$28
+; right turn wall left side
+!byte $0D,$00,$03
+!byte $17,$09
+!byte $28,$28,$28
+; wall front right side
+!byte $0D,$00,$01
+!byte $15,$0B
+!byte $28
+; right turn wall flat
+!byte $01,$06,$0E
+!byte $19,$0D
+!byte $01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01
+; floor border far side and near side
+!byte $05,$02,$06
+!byte $15,$0E
+!byte $52,$29,$A4,$29,$29,$29
+
+; right turn wall flat
+!byte $01,$06,$01
+!byte $16,$0D
+!byte $28
+
+; wall front right side
+!byte $11,$00,$00
+!byte $15,$0B
+; wall front right side
+!byte $10,$00,$00
+!byte $16,$0B
+; wall front right side
+!byte $0E,$00,$00
+!byte $15,$0C
+
+; floor
+!byte $01,$02,$48
+!byte $14,$0E
+!byte $28,$01,$01
+!byte $26,$01,$01
+!byte $26,$01,$01,$01
+!byte $25,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; hall end
+!byte $01,$00,$00
+!byte $14,$0D
 ; END, null terminated
 !byte $00
 
