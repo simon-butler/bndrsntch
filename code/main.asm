@@ -15,6 +15,7 @@
 ;   $0000 - $0001   : reserved
 ;   $0002 - $007F   : general purpose
 ;   $0080 - $00FF   : transferred tables
+; $0400 - $07FF     : main screen, in bank 0, used for loading screen
 ; $1000 - $2000     : main code and routines
 ; $3000 - $3200     : game logic tables and data, and strings
 ; $4400 - $47FF     : screen for first person mode (bank 1)
@@ -23,6 +24,16 @@
 ; $8400 - $87FF     : screen for map mode (bank 2) written to directly by loader
 ; 
 ;==========================================================
+
+
+;==========================================================
+; SYSTEM CONFIG
+;==========================================================
+
+SYS_PAL                 = $32   ; 50 frames a second
+SYS_NTSC                = $3C   ; 60 frames a second
+
+SYS_FRAMES              = SYS_PAL   ; IMPORTANT! SET THIS TO THE RIGHT REGION BEFORE BUILDING!
 
 ;==========================================================
 ; SYSTEM AND KERNAL ROUTINES 
@@ -36,6 +47,9 @@ FN_GETIN                = $FFE4     ; get character from buffer (keyboard buffer
 
 VIC_BG_COL              = $D021
 VIC_BORDER_COL          = $D020
+
+VIC_CTRL_REG_1          = $D011
+VIC_RASTER_IRQ_CMP      = $D012
 
 VIC_CIA2_BANK_SELECT    = $DD00     ; bits 0, 1 are system memroy bank select (default 11b)
 VIC_CIA2_DATA_DIR_A     = $DD02     ; set bits 0, 1 to enable bank switching
@@ -211,8 +225,9 @@ Z_TABLE_START           = $80     ; not yet used, but possible idea
 * = $1000
 
 start_game
-  jsr init_helper_vars
+  jsr init_helper_vars                  ; some initial set up so some routines work correctly
   jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
+  jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
 start_init_player_data
   lda #$07                              ; player X pos = 07
   sta Z_PLYR_POS_X
@@ -785,6 +800,227 @@ draw_from_tab_finish
   rts
 
 
+;==========================================================
+; ROUTINES - SPECIAL EFFECTS
+;==========================================================
+
+; === post_loading_effect
+;   series of effects to apply to screen after loading
+; assumptions:
+;   expects screen to contain the large glyph symbol
+post_loading_effect
+  lda #CN_COL_VAL_BLUE          ; set all foreground on col map to blue, same as background, so hides characters
+  jsr fill_screen_cols
+  jsr fx_loading_text_col_exception
+  ldx #$03                      ; wait for 3 seconds
+  ldy #$00                      ;   should not wait for additional frames
+  lda #CN_COL_VAL_BLUE          ; load alternate colour to flash to (uses current light blue as other)
+  jsr wait_sec_blocking         ; wait
+  jsr fx_line_block_edges       ; apply visual effect, change loading image into line edges image
+  lda #CN_COL_VAL_BLACK         ; set screen background and border to black
+  sta VIC_BORDER_COL
+  sta VIC_BG_COL
+  lda #CN_COL_VAL_WHITE         ; set all foreground on col map to white
+  jsr fill_screen_cols
+  lda #$0A                      ; set up flash screen, flash 10 times only
+  ldx #CN_COL_VAL_L_BLUE        ; first colour light green
+  ldy #CN_COL_VAL_BLUE          ; second colour blue
+  jsr fx_flash_screen_bg_only   ; do flash screen
+  ldx #$08                      ; wait for 8 seconds
+  ldy #$00                      ;   should not wait for additional frames
+  jsr wait_sec_blocking
+  rts
+
+; === fx_loading_text_col_exception
+;   sets colour for "/LOADING/" word text to light blue so can still see
+; assumptions:
+;   9 characters of text to colour exists at starting text location (20,23)
+; params:
+;   none
+; uses:
+;   A, Y
+;   plot variables
+; side effects:
+;   plot_xy:    A, X, Y, c, plot variables
+; returns:
+;   none
+fx_loading_text_col_exception
+  lda #$14                      ; x pos to $14 (20)
+  sta Z_SCR_X
+  lda #$17                      ; y pos to $17 (23)
+  sta Z_SCR_Y
+  jsr plot_set_xy               ; set plot variables 
+  ldy #$00                      ; zero Y for indirect addressing
+  lda #CN_COL_VAL_L_BLUE        ; load light blue
+  sta (Z_COL_LOW_BYTE), Y       ; write 9 bytes one after the other, incrementing Y to get next
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  iny
+  sta (Z_COL_LOW_BYTE), Y
+  rts
+
+
+; === fx_flash_screen
+;   changes screen bg colour only (not the border) quickly between two colours, a specified number of times
+; params:
+;   A - number of times to flash
+;   X - first colour to flash
+;   Y - second colour to flash
+; uses:
+;   A, X, Y
+;   Z_TEMP_1 / 2 / 3 / 4
+; side effects:
+;   wait_sec_blocking:    A, X, Y
+; returns:
+;   none
+fx_flash_screen_bg_only
+  sta Z_TEMP_1                  ; store number of times to flash in temp 1
+  lda VIC_BG_COL                ; load current background colour and save to temp 2, to restore at end
+  sta Z_TEMP_2
+  stx Z_TEMP_3
+  sty Z_TEMP_4
+fx_flash_screen_loop
+  lda Z_TEMP_3                  ; background to first colour
+  sta VIC_BG_COL
+  ldx #$00                      ; wait for 0 seconds, 10 frames
+  ldy #$0A
+  jsr wait_sec_blocking
+  lda Z_TEMP_4                  ; background to second colour
+  sta VIC_BG_COL
+  ldx #$00                      ; wait for 0 seconds, 10 frames
+  ldy #$0A
+  jsr wait_sec_blocking
+  dec Z_TEMP_1                  ; counter-- (temp 1)
+  lda Z_TEMP_1                  ; load temp 1 to check if zero (automatic)
+  bne fx_flash_screen_loop      ; if not zero, continue loop
+  lda Z_TEMP_2                  ; restore screen colour when started
+  sta VIC_BG_COL
+  rts
+
+; === fx_line_block_edges
+;   visual effect, scans through screen and adds edges to blocks, eventually clearing everything else
+;   does not use effecient methods, demo code to show glitchy effect
+fx_line_block_edges
+fx_line_block_edges_horz
+  ldy #$00                      ; zero Y for indirect addressing, and to zero scr pos y
+  sty Z_SCR_Y
+fx_line_bk_edh_line_start
+  lda #$00                      ; x pos to zero
+  sta Z_SCR_X
+  jsr plot_set_xy               ; update address variables
+  lda (Z_SCR_LOW_BYTE), Y       ; read first character of line
+  sta Z_TEMP_1                  ; store first character in line
+  inc Z_SCR_X                   ; next character in x axis
+fx_line_bk_edh_char_loop
+  jsr plot_set_xy               ; update address variables
+  lda (Z_SCR_LOW_BYTE), Y       ; read next character
+  cmp Z_TEMP_1                  ; check if same as last character in temp 1
+  sta Z_TEMP_2                  ; store in temp 1 (doesn't change z flag)
+  beq fx_line_bk_edh_char_cont  ; if the same, just continue to no match
+  cmp #CN_CHAR_BLOCK            ; if different, is edge, check if this character is block
+  bne fx_line_bk_edh_ck_other   ; if not block, then continue to check temp character
+  lda #$74                      ; otherwise should draw at current location, load hardcoded char for left bar
+  sta (Z_SCR_LOW_BYTE), Y
+  jmp fx_line_bk_edh_char_cont
+fx_line_bk_edh_ck_other
+  lda Z_TEMP_1                  ; load char from temp 1
+  cmp #CN_CHAR_BLOCK            ; check if block (already ruled out chars being the same, so means other char not block also)
+  bne fx_line_bk_edh_char_cont  ; if not a block, no match
+  lda #$67                      ; otherwise should draw at current location, load hardcoded char for right bar
+  sta (Z_SCR_LOW_BYTE), Y
+fx_line_bk_edh_char_cont
+  lda Z_TEMP_2                  ; move current character in temp 2 into last char in temp 1
+  sta Z_TEMP_1
+  inc Z_SCR_X                   ; next character in x axis
+  lda Z_SCR_X                   ; load next char x pos
+  cmp #$28                      ; compare x pos with max chars in line
+  bne fx_line_bk_edh_char_loop  ; if not, then continue with next character read
+  inc Z_SCR_Y                   ; next character in y axis
+  lda Z_SCR_Y                   ; load next char y pos
+  cmp #$19                      ; compare with max rows (25, actual len)
+  bne fx_line_bk_edh_line_start ; if more lines, go to start another line
+fx_line_bk_edh_finish
+fx_line_block_edges_vert
+  lda #$00                      ; zero scr pos x
+  sta Z_SCR_X
+fx_line_bk_edv_line_start
+  lda #$00                      ; y pos to zero
+  sta Z_SCR_Y
+  jsr plot_set_xy               ; update address variables
+  lda (Z_SCR_LOW_BYTE), Y       ; read first character of line
+  sta Z_TEMP_1                  ; store first character in line
+  inc Z_SCR_Y                   ; next character in y axis
+fx_line_bk_edv_char_loop
+  jsr plot_set_xy               ; update address variables
+  lda (Z_SCR_LOW_BYTE), Y       ; read next character
+  cmp Z_TEMP_1                  ; check if same as last character in temp 1
+  sta Z_TEMP_2                  ; store in temp 1 (doesn't change z flag)
+  beq fx_line_bk_edv_char_cont  ; if the same, just continue to no match
+  cmp #CN_CHAR_BLOCK            ; if different, is edge, check if this character is block
+  bne fx_line_bk_edv_ck_other   ; if not block, then continue to check temp character
+  lda #$77                      ; otherwise should draw at current location, load hardcoded char for top bar
+  sta (Z_SCR_LOW_BYTE), Y
+  jmp fx_line_bk_edv_char_cont
+fx_line_bk_edv_ck_other
+  lda Z_TEMP_1                  ; load char from temp 1
+  cmp #CN_CHAR_BLOCK            ; check if block (already ruled out chars being the same, so means other char not block also)
+  bne fx_line_bk_edv_char_cont  ; if not a block, no match
+  lda #$6F                      ; otherwise should draw at current location, load hardcoded char for bottom bar
+  sta (Z_SCR_LOW_BYTE), Y
+fx_line_bk_edv_char_cont
+  lda Z_TEMP_2                  ; move current character in temp 2 into last char in temp 1
+  sta Z_TEMP_1
+  inc Z_SCR_Y                   ; next character in y axis
+  lda Z_SCR_Y                   ; load next char y pos
+  cmp #$19                      ; compare y pos with val
+  bne fx_line_bk_edv_char_loop  ; if not, then continue with next character read
+  inc Z_SCR_X                   ; next character in y axis
+  lda Z_SCR_X                   ; load next char y pos
+  cmp #$28                      ; compare with max val
+  bne fx_line_bk_edv_line_start ; if more lines, go to start another line
+fx_line_bk_edv_finish
+fx_line_block_edges_clear
+  ldy #$00                      ; zero Y for indirect addressing, and to zero scr pos y
+  sty Z_SCR_Y
+fx_line_bk_edc_line_start
+  lda #$00                      ; x pos to zero
+  sta Z_SCR_X
+fx_line_bk_edc_char_loop
+  jsr plot_set_xy               ; update address variables
+  lda (Z_SCR_LOW_BYTE), Y       ; read next character
+  cmp #$74                      ; check if left bar char
+  beq fx_line_bk_edc_char_cont  ; if is, skip clearing
+  cmp #$67                      ; check if right bar char
+  beq fx_line_bk_edc_char_cont  ; if is, skip clearing
+  cmp #$77                      ; check if top bar char
+  beq fx_line_bk_edc_char_cont  ; if is, skip clearing
+  cmp #$6F                      ; check if botton bar char
+  beq fx_line_bk_edc_char_cont  ; if is, skip clearing
+  lda #CN_CHAR_SPACE            ; otherwise load space and clear
+  sta (Z_SCR_LOW_BYTE), Y
+fx_line_bk_edc_char_cont
+  inc Z_SCR_X                   ; next character in x axis
+  lda Z_SCR_X                   ; load next char x pos
+  cmp #$28                      ; compare x pos with max chars in line
+  bne fx_line_bk_edc_char_loop  ; if not, then continue with next character read
+  inc Z_SCR_Y                   ; next character in y axis
+  lda Z_SCR_Y                   ; load next char y pos
+  cmp #$19                      ; compare with max rows (25, actual len)
+  bne fx_line_bk_edc_line_start ; if more lines, go to start another line
+fx_line_bk_edc_finish
+  rts                           ; otherwise finished
 
 
 
@@ -793,6 +1029,88 @@ draw_from_tab_finish
 ;==========================================================
 
 ; these routines are general and form a bespoke standard library
+
+; === wait_sec_blocking
+;   wait for the number of seconds + frames given, blocks foreground process.
+; notes:
+;   first frame traversed will be inaccurately lengthed as we count from when the last position is reached
+; assumptions:
+;   X or Y > 0
+;   if Y == 0, X must be > 0
+; params:
+;   X - number of seconds to wait. should not be garbage, set to zero if only frames used.
+;   Y - number of frames to wait. should not be garbage, set to zero if even seconds.
+; uses:
+;   A, X, Y
+;   Z_TEMP_1 / 2
+wait_sec_blocking
+  inx                           ; X++, counting method needs seconds to be +1
+  iny                           ; Y++, same for Y, we don't know where in frame we'll be first time so add 1
+  lda #$FF
+wait_sec_bl_loop
+  cmp VIC_RASTER_IRQ_CMP        ; check if on last line of raster, thus a frames worth of time has passed
+  bne wait_sec_bl_loop          ; if not, loop until is on last line (loop through raster lines)
+  dey                           ; decrease frame count
+  bne wait_sec_bl_loop          ; if not reached zero yet, keep waiting on frames
+  dex                           ; reduce number of seconds
+  beq wait_sec_bl_finish        ; if zero, then end
+  ldy SYS_FRAMES                ; otherwise put frame count to max, begin again
+  jmp wait_sec_bl_loop
+wait_sec_bl_finish
+  rts
+
+; === wait_sec_blocking_border_flash
+;   wait for the number of seconds + frames given, blocks foreground process, with scrolling bar of a given colour
+; notes:
+;   first frame traversed will be inaccurately lengthed as we count from when the last position is reached.
+; assumptions:
+;   X or Y > 0
+;   if Y == 0, X must be > 0
+; params:
+;   A - other colour to use for bar
+;   X - number of seconds to wait. should not be garbage, set to zero if only frames used.
+;   Y - number of frames to wait. should not be garbage, set to zero if even seconds.
+; uses:
+;   A, X, Y
+;   Z_TEMP_1, 2, 3
+wait_sec_blocking_border_scroll_bar
+  sta Z_TEMP_2                  ; store alternate border colour in temp 2
+  lda VIC_BORDER_COL            ; get current border colour
+  sta Z_TEMP_1                  ; store in temp 1
+  lda #$00                      ; zero temp 3, used to keep track of which colour to show
+  sta Z_TEMP_3                    
+  inx                           ; X++, counting method needs seconds to be +1
+  iny                           ; Y++, same for Y, we don't know where in frame we'll be first time so add 1
+wait_sec_bl_bf_loop
+  lda Z_TEMP_3                  ; load colour for comparison
+  lsr                           ; reduce number by 3 right shifts (divide by 8)
+  lsr
+  lsr
+  cmp #$00                      ; check if should display second colour
+  beq wait_sec_bl_bf_col2       ; if not, skip colour reset
+  lda Z_TEMP_1                  ; load border col 1
+  sta VIC_BORDER_COL            ; set border colour
+  jmp wait_sec_bl_bf_cont
+wait_sec_bl_bf_col2
+  lda Z_TEMP_2                  ; load border col 2
+  sta VIC_BORDER_COL            ; set border colour
+  ;lda #$00                      ; reset counter in temp 3
+  ;sta Z_TEMP_3
+wait_sec_bl_bf_cont
+  inc Z_TEMP_3                  ; (temp 1)++, next colour
+  lda #$FF                      ; set A to $FF to check raster
+  cmp VIC_RASTER_IRQ_CMP        ; check if on last line of raster, thus a frames worth of time has passed
+  bne wait_sec_bl_bf_loop       ; if not, loop until is on last line (loop through raster lines)
+  dey                           ; decrease frame count
+  bne wait_sec_bl_bf_loop       ; if not reached zero yet, keep waiting on frames
+  dex                           ; reduce number of seconds
+  beq wait_sec_bl_bf_finish     ; if zero, then end
+  ldy SYS_FRAMES                ; otherwise put frame count to max, begin again
+  jmp wait_sec_bl_bf_loop
+wait_sec_bl_bf_finish
+  lda Z_TEMP_1                  ; get starting border colour from temp 1
+  sta VIC_BORDER_COL            ; set border colour back to this value
+  rts
 
 ; === init_helper_vars
 ;   initialise some variables used by helper routines
@@ -1895,7 +2213,7 @@ sub_fill_mem_unrolled_page
   rts
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_routines   ; = $1740 in this version
+debug_label_end_of_routines   ; = $198c in this version
 
 
 ;==========================================================
@@ -1978,31 +2296,31 @@ debug_label_end_of_tables_strings   ; = $3097 in this version
 ; this is just for a little visual glitch effect when the same starts
 * = $0400
 data_scr_glyph_is_a_glitch
-!byte 32,32,32,12,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,7,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,15,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,14
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,1,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,9,32,32,32,32,32,32,32
-!byte 32,32,32,32,32,32,32,32,32,32,32,32,32,4,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32
+!byte 160,160,160,160,160,160,160,160,160,160,160,160,160,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,160,160,160,160,160,160,160,160,160
+!byte 160,160,160,160,160,160,160,160,160,160,102,102,102,102,102,32,32,32,32,32,32,32,32,32,32,32,32,102,102,102,102,102,102,160,160,160,160,160,160,160
+!byte 160,160,160,160,160,160,160,160,160,102,102,102,102,102,102,32,32,32,160,160,160,160,160,160,32,32,32,32,32,102,102,102,102,102,160,160,160,160,160,160
+!byte 160,160,160,160,160,160,160,160,160,102,102,102,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,102,102,102,102,102,160,160,160,160,160
+!byte 160,160,160,160,160,160,160,160,102,102,102,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,102,102,102,102,160,160,160,160
+!byte 160,160,160,160,160,160,160,102,102,102,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,102,102,102,160,160,160,160
+!byte 160,160,160,160,160,160,102,102,102,102,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,102,102,102,160,160,160,160
+!byte 160,160,160,160,160,160,102,102,102,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,102,102,102,160,160,160
+!byte 160,160,160,160,160,160,102,102,102,32,32,32,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,32,32,32,32,102,102,102,160,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,102,102,102,102,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,102,102,102,102,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,102,102,102,160,160
+!byte 160,160,160,160,160,102,102,102,32,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,102,102,102,160,160,160
+!byte 160,160,160,160,160,102,102,102,102,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,32,102,102,102,160,160,160
+!byte 160,160,160,160,160,102,102,102,102,32,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,102,102,102,160,160,160,160
+!byte 160,160,160,160,160,160,102,102,102,102,32,32,160,160,160,160,160,160,32,32,32,32,32,32,160,160,160,160,160,160,32,32,32,102,102,102,160,160,160,160
+!byte 160,160,160,160,160,160,160,160,102,102,102,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,102,102,102,160,160,160,160,160
+!byte 160,160,160,160,160,160,160,160,160,102,102,102,32,32,32,32,32,32,32,32,47,12,15,1,4,9,14,7,47,32,32,102,102,102,160,160,160,160,160,160
+!byte 160,160,160,160,160,160,160,160,160,160,160,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,102,160,160,160,160,160,160,160,160
 
 ; used directly in video bank 2 (actually used in game)
 * = $8400
@@ -2938,7 +3256,8 @@ data_corridor_right_near_exit_only
 
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_draw_data   ; = $7469 in this version
+debug_label_end_of_draw_data    ; = $79b7 in this version
+                                ;   that 2487 bytes, recording 7 different screen halfs mirrored on both sizes
 
 ;==========================================================
 ; IMAGE DATA
