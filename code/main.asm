@@ -185,17 +185,17 @@ Z_PLYR_POS_X            = $40
 Z_PLYR_POS_Y            = $41
 Z_PLYR_FACING           = $42
 ; - helper
-Z_PLYR_LOC_TYPE         = $43     ; location type, i.e. the index in the types table, see data_front_facing_info
-Z_PLYR_LOC_TY_ADDR_LOW  = $44     ; low byte of addr of start of row of current type index
-Z_PLYR_LOC_TY_ADDR_HIGH = $45     ; high byte ^ same
-Z_PLYR_LOOK_AHEAD_TYPE  = $46     ; loc type of loc we can look ahead to (front path must be open in cur loc)
+Z_PLYR_LOC_TYPE         = $43           ; location type, i.e. the index in the types table, see data_front_facing_info
+Z_PLYR_LOC_TY_ADDR_LOW  = $44           ; low byte of addr of start of row of current type index
+Z_PLYR_LOC_TY_ADDR_HIGH = $45           ; high byte ^ same
+Z_PLYR_LOOK_AHEAD_TYPE  = $46           ; loc type of loc we can look ahead to (front path must be open in cur loc)
 Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW   = $47   ; low byte of addr of start of row of look ahead type index
 Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH  = $48   ; high byte ^ same
-Z_PLYR_LOOK_AHEAD_X     = $49     ; x pos of look ahead to next location, $FF if wall ahead (convinence)
-Z_PLYR_LOOK_AHEAD_Y     = $4A     ; y pos of ^ same
+Z_PLYR_LOOK_AHEAD_X     = $49           ; x pos of look ahead to next location, $FF if wall ahead (convinence)
+Z_PLYR_LOOK_AHEAD_Y     = $4A           ; y pos of ^ same
 
 ; lookup tables
-Z_TABLE_START           = $80     ; not yet used, but possible idea
+Z_TABLE_START           = $80           ; not yet used, but possible idea
 
 
 ;==========================================================
@@ -227,7 +227,7 @@ Z_TABLE_START           = $80     ; not yet used, but possible idea
 start_game
   jsr init_helper_vars                  ; some initial set up so some routines work correctly
   jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
-  jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
+  ;jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
 start_init_player_data
   lda #$07                              ; player X pos = 07
   sta Z_PLYR_POS_X
@@ -237,7 +237,7 @@ start_init_player_data
   sta Z_PLYR_FACING
 start_enter_screen
   jmp start_first_person
-  ; NOTE - in this version the map is unreachable
+  ;jmp start_map
 ;*** map mode
 start_map
   lda #CN_VID_BANK_2                    ; load code for video bank 2
@@ -282,7 +282,7 @@ first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
   ;jsr special_char_test                 ; character test of all special characters for bank 1
   ;jsr wait_for_key
-  jsr draw_left_long_corridor           ; test drawing long corridor
+  jsr draw_corridor_test                ; test drawing long corridor
 unreachable_infinite_loop
   jmp *
 
@@ -356,17 +356,19 @@ det_loc_type_finish
 
 ; === update_player_look_ahead
 ;   updates the look ahead vars based on the current player position and location type
+; assumptions:
+;   player data (pos x, y, facing) should be updated and correct before calling this routine.
 ; params:
 ;   none
 ; uses:
-;   A, Y
+;   A, X, Y
 ;   Z_TEMP_1
-;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH
 ; side effects:
+;   none
+; returns:
 ;   Z_PLYR_LOOK_AHEAD_TYPE
 ;   Z_PLYR_LOOK_AHEAD_X / Y
-; returns:
-;   none
+;   Z_PLYR_LOC_TY_ADDR_LOW / HIGH
 update_player_look_ahead
   ldy #$04                          ; set offset to facing direction part of location type row bytes, firsr one is UP, i.e. forward
   lda (Z_PLYR_LOC_TY_ADDR_LOW), Y   ; get facing direction byte code ($00 = can move, $FF = can't move)
@@ -400,12 +402,45 @@ update_player_look_ahead
   clc                               ; clear carry flag before addition
   adc Z_TEMP_1                      ; add amount to move y position to y position
   sta Z_PLYR_LOOK_AHEAD_Y           ; store updated position back in look ahead y
-  ; TODO : read type in look ahead map location, and set low / high addr
-  lda #$FF
-  sta Z_PLYR_LOOK_AHEAD_TYPE
-  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
-  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
+  ; read type in look ahead map location, and set low / high addr, pretty much the same as determine_location_type
+  lda Z_PLYR_LOOK_AHEAD_X           ; store look ahead pos x in plot x
+  sta Z_SCR_X
+  lda Z_PLYR_LOOK_AHEAD_Y           ; store look ahead pos y in plot y
+  sta Z_SCR_Y
+  jsr plot_set_xy                   ; move to player pos
+  ldy #$00                          ; zero Y, for indirect mem access
+  lda (Z_SCR_LOW_BYTE), Y           ; get character at player post on map
+  sta Z_TEMP_1                      ; store char in temp storage 1
+  ; set up table scanning method
+  lda #>data_front_facing_info      ; load high byte (page) of front facing info table
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH  ; store in high byte of player location type addr
+  lda #<data_front_facing_info      ; load low byte of table
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW ; store in low byte of player location type addr
+  ldx #$00                          ; zero X, will be used to count row
+  ldy Z_PLYR_FACING
+upd_plyr_look_ahead_loop
+  lda (Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW), Y  ; get character for this facing direction (Y) and row (with addr)
+  cmp Z_TEMP_1
+  beq upd_plyr_look_ahead_found     ; found match for type
+  inx                               ; otherwise X++, row to next row
+  cpx #$07                          ; check if row is on 8th row, i.e. gone past end
+  beq upd_plyr_look_ahead_err          ; if so, go to error state, exit
+  lda Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW ; get low byte of current addr 1 ptr
+  clc                               ; clear carry flag before addition
+  adc #$08                          ; add 8 to low byte count, i.e. next row (assumes does not cross page)
+  sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW ; store updated low byte address
+  jmp upd_plyr_look_ahead_loop
+upd_plyr_look_ahead_found
+  stx Z_PLYR_LOOK_AHEAD_TYPE
   jmp upd_plyr_look_ahead_finish
+upd_plyr_look_ahead_err
+  ldx #$FF                          ; set row to error code
+  ; TODO : remove this error handing, debug only, make fatal
+  lda #$00    ;at @ char
+  jsr fill_screen_chars
+  lda #$03
+  jsr fill_screen_cols
+  jmp *
 upd_plyr_look_ahead_off
   lda #$FF
   sta Z_PLYR_LOOK_AHEAD_TYPE
@@ -682,6 +717,7 @@ draw_two_tone_bg
 
 
 ; === special_char_test
+;   basic test, print out first $13 (19) characters
 special_char_test
   lda #CN_BK1_SCR_START_LOW
   sta Z_ADDR_1_LOW
@@ -697,18 +733,18 @@ special_char_test_loop
   rts
 
 
-; === draw_left_long_corridor
-;   draw long left corridor
-draw_left_long_corridor
-  lda #<data_corridor_left_near_exit_only
+; === draw_corridor_test
+;   test corridor drawing
+draw_corridor_test
+  lda #<data_C_L_NE
   sta Z_ADDR_1_LOW
-  lda #>data_corridor_left_near_exit_only
+  lda #>data_C_L_NE
   sta Z_ADDR_1_HIGH
   jsr draw_from_tables
   ;
-  lda #<data_corridor_right_near_exit_only
+  lda #<data_C_R_NW
   sta Z_ADDR_1_LOW
-  lda #>data_corridor_right_near_exit_only
+  lda #>data_C_R_NW
   sta Z_ADDR_1_HIGH
   jsr draw_from_tables
   rts
@@ -2264,6 +2300,8 @@ data_y_movement_facing_dir
 ;     Up  Rt  Lft Dwn
 !byte $00,$01,$01,$02
 
+
+
 ;==========================================================
 ; STRING DATA
 ;==========================================================
@@ -2395,8 +2433,8 @@ data_scr_map
 
 * = $7000
 
-; double long left side corridor
-data_corridor_double_long_left
+; corridor left, back exit
+data_C_L_BE
 ; top row, main line
 ;    char col len
 !byte $07,$00,$0A
@@ -2437,8 +2475,8 @@ data_corridor_double_long_left
 ; END, null terminated
 !byte $00
 
-; double long right side corridor
-data_corridor_double_long_right
+; corridor right, back exit
+data_C_R_BE
 ; top row, main line
 ;    char col len
 !byte $06,$00,$0A
@@ -2479,7 +2517,8 @@ data_corridor_double_long_right
 ; END, null terminated
 !byte $00
 
-data_corridor_right_exit_near_left
+; corridor left, near exit, back exit
+data_C_L_NEBE
 ; top row, main line
 !byte $07,$00,$04
 !byte $07,$00
@@ -2549,7 +2588,8 @@ data_corridor_right_exit_near_left
 ; END, null terminated
 !byte $00
 
-data_corridor_right_exit_near_right
+; corridor right, near exit, back exit
+data_C_R_NEBE
 ; top row, main line
 !byte $06,$00,$04
 !byte $20,$00
@@ -2620,9 +2660,8 @@ data_corridor_right_exit_near_right
 ; END, null terminated
 !byte $00
 
-; ---
-
-data_corridor_left_exit_near_and_far_left_with_straight
+; corridor left, near exit, far exit, back exit
+data_C_L_NEFEBE
 ; top row, main line
 !byte $07,$00,$04
 !byte $07,$00
@@ -2644,12 +2683,10 @@ data_corridor_left_exit_near_and_far_left_with_straight
 ; top row, far top side patch up
 !byte $08,$00,$00
 !byte $10,$07
-
 ; left turn wall right side
 !byte $0C,$00,$03
 !byte $10,$09
 !byte $28,$28,$28
-
 ; left turn wall join
 !byte $12,$00,$00
 !byte $0F,$07
@@ -2665,7 +2702,6 @@ data_corridor_left_exit_near_and_far_left_with_straight
 !byte $0C,$00,$07
 !byte $0B,$05
 !byte $28,$28,$28,$28,$28,$28,$28
-
 ; wall front left side
 !byte $12,$00,$00
 !byte $12,$0B
@@ -2679,12 +2715,10 @@ data_corridor_left_exit_near_and_far_left_with_straight
 !byte $01,$06,$01
 !byte $11,$0D
 !byte $28
-
 ; left turn wall right side
 !byte $0C,$00,$07
 !byte $0B,$05
 !byte $28,$28,$28,$28,$28,$28,$28
-
 ; left turn wall flat
 !byte $01,$06,$0E
 !byte $0C,$0D
@@ -2693,7 +2727,7 @@ data_corridor_left_exit_near_and_far_left_with_straight
 !byte $03,$02,$07
 !byte $12,$0E
 !byte $27,$27,$27,$9C,$27,$27,$27
-
+; floor
 !byte $01,$02,$48
 !byte $13,$0E
 !byte $26,$01,$01
@@ -2712,7 +2746,8 @@ data_corridor_left_exit_near_and_far_left_with_straight
 ; END, null terminated
 !byte $00
 
-data_corridor_right_exit_near_and_far_right_with_straight
+; corridor right, near exit, far exit, back exit
+data_C_R_NEFEBE
 ; top row, main line
 !byte $06,$00,$04
 !byte $20,$00
@@ -2765,12 +2800,10 @@ data_corridor_right_exit_near_and_far_right_with_straight
 !byte $05,$02,$06
 !byte $15,$0E
 !byte $52,$29,$A4,$29,$29,$29
-
 ; right turn wall flat
 !byte $01,$06,$01
 !byte $16,$0D
 !byte $28
-
 ; wall front right side
 !byte $11,$00,$00
 !byte $15,$0B
@@ -2780,7 +2813,6 @@ data_corridor_right_exit_near_and_far_right_with_straight
 ; wall front right side
 !byte $0E,$00,$00
 !byte $15,$0C
-
 ; floor
 !byte $01,$02,$48
 !byte $14,$0E
@@ -2800,9 +2832,8 @@ data_corridor_right_exit_near_and_far_right_with_straight
 ; END, null terminated
 !byte $00
 
-; ---
-
-data_corridor_left_exit_near_and_far_left_only
+; corridor left, near exit, far exit
+data_C_L_NEFE
 ; top row, main line
 !byte $07,$00,$04
 !byte $07,$00
@@ -2824,12 +2855,10 @@ data_corridor_left_exit_near_and_far_left_only
 ; top row, far top side patch up
 !byte $08,$00,$00
 !byte $10,$07
-
 ; left turn wall right side
 !byte $0C,$00,$03
 !byte $10,$09
 !byte $28,$28,$28
-
 ; left turn wall join
 !byte $12,$00,$00
 !byte $0F,$07
@@ -2845,27 +2874,18 @@ data_corridor_left_exit_near_and_far_left_only
 !byte $0C,$00,$07
 !byte $0B,$05
 !byte $28,$28,$28,$28,$28,$28,$28
-
-; wall front left side
-;!byte $12,$00,$00
-;!byte $12,$0B
 ; wall front left side
 !byte $10,$00,$02
 !byte $11,$0A
 !byte $01,$01
-; wall front left side
-;!byte $0E,$00,$00
-;!byte $12,$0C
 ; right turn wall flat
 !byte $01,$06,$05
 !byte $11,$0D
 !byte $01,$01,$26,$01,$01
-
 ; left turn wall right side
 !byte $0C,$00,$07
 !byte $0B,$05
 !byte $28,$28,$28,$28,$28,$28,$28
-
 ; left turn wall flat
 !byte $01,$06,$0E
 !byte $0C,$0D
@@ -2874,7 +2894,7 @@ data_corridor_left_exit_near_and_far_left_only
 !byte $03,$02,$06
 !byte $11,$0F
 !byte $27,$27,$9C,$27,$27,$27
-
+; floor
 !byte $01,$02,$47
 !byte $11,$0F
 !byte $01,$01
@@ -2890,7 +2910,8 @@ data_corridor_left_exit_near_and_far_left_only
 ; END, null terminated
 !byte $00
 
-data_corridor_right_exit_near_and_far_right_only
+; corridor right, near exit, far exit
+data_C_R_NEFE
 ; top row, main line
 !byte $06,$00,$04
 !byte $20,$00
@@ -2939,16 +2960,14 @@ data_corridor_right_exit_near_and_far_right_only
 !byte $05,$02,$06
 !byte $15,$0E
 !byte $52,$29,$A4,$29,$29,$29
-
 ; right turn wall flat
 !byte $01,$06,$05
 !byte $14,$0D
 !byte $01,$01,$26,$01,$01
-
+; top of wall
 !byte $10,$00,$02
 !byte $14,$0A
 !byte $01,$01
-
 ; floor
 !byte $01,$02,$47
 !byte $14,$0F
@@ -2965,8 +2984,8 @@ data_corridor_right_exit_near_and_far_right_only
 ; END, null terminated
 !byte $00
 
-
-data_corridor_left_double_distance_no_exit
+; corridor left, far wall
+data_C_L_FW
 ; top row, main line
 !byte $07,$00,$09
 !byte $08,$00
@@ -3011,10 +3030,9 @@ data_corridor_left_double_distance_no_exit
 ; END, null terminated
 !byte $00
 
-; double long right side corridor
-data_corridor_right_double_distance_no_exit
+; corridor right, far wall
+data_C_R_FW
 ; top row, main line
-;    char col len
 !byte $06,$00,$09
 !byte $1F,$00
 !byte $27,$27,$27,$27,$27,$27,$27,$27,$27
@@ -3058,13 +3076,9 @@ data_corridor_right_double_distance_no_exit
 ; END, null terminated
 !byte $00
 
-
-; ---
-
-; double long left side corridor
-data_corridor_left_no_exit
+; corridor left, near wall
+data_C_L_NW
 ; top row, main line
-;    char col len
 !byte $07,$00,$06
 !byte $08,$00
 !byte $29,$29,$29,$29,$29,$29
@@ -3097,7 +3111,7 @@ data_corridor_left_no_exit
 !byte $0E,$12
 !byte $27,$27,$27,$27,$27,$27
 ; floor
-!byte $01,$02,$38
+!byte $01,$02,$37
 !byte $0F,$12
 !byte $01,$01,$01,$01
 !byte $23,$01,$01,$01,$01,$01
@@ -3109,10 +3123,9 @@ data_corridor_left_no_exit
 ; END, null terminated
 !byte $00
 
-; double long right side corridor
-data_corridor_right_no_exit
+; corridor right, near wall
+data_C_R_NW
 ; top row, main line
-;    char col len
 !byte $06,$00,$06
 !byte $1F,$00
 !byte $27,$27,$27,$27,$27,$27
@@ -3145,7 +3158,7 @@ data_corridor_right_no_exit
 !byte $19,$12
 !byte $29,$29,$29,$29,$29,$29
 ; floor
-!byte $01,$02,$38
+!byte $01,$02,$37
 !byte $14,$12
 !byte $01,$01,$01,$01
 !byte $24,$01,$01,$01,$01,$01
@@ -3157,11 +3170,9 @@ data_corridor_right_no_exit
 ; END, null terminated
 !byte $00
 
-
-; double long left side corridor
-data_corridor_left_near_exit_only
+; corridor left, near exit
+data_C_L_NE
 ; top row, main line
-;    char col len
 !byte $07,$00,$04
 !byte $07,$00
 !byte $29,$29,$29,$29
@@ -3206,10 +3217,9 @@ data_corridor_left_near_exit_only
 ; END, null terminated
 !byte $00
 
-; double long right side corridor
-data_corridor_right_near_exit_only
+; corridor right, near exit
+data_C_R_NE
 ; top row, main line
-;    char col len
 !byte $06,$00,$04
 !byte $20,$00
 !byte $27,$27,$27,$27
