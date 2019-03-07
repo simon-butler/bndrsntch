@@ -194,6 +194,9 @@ Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH  = $48   ; high byte ^ same
 Z_PLYR_LOOK_AHEAD_X     = $49           ; x pos of look ahead to next location, $FF if wall ahead (convinence)
 Z_PLYR_LOOK_AHEAD_Y     = $4A           ; y pos of ^ same
 
+; game settings
+Z_GAME_MODE             = $50           ; 0 = title screen, 1 = map, 2 = first person, 3 = choice, 4 = info
+
 ; lookup tables
 Z_TABLE_START           = $80           ; not yet used, but possible idea
 
@@ -228,6 +231,7 @@ start_game
   jsr init_helper_vars                  ; some initial set up so some routines work correctly
   jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
   ;jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
+  ;jsr wait_for_key
 start_init_player_data
   lda #$07                              ; player X pos = 07
   sta Z_PLYR_POS_X
@@ -235,11 +239,24 @@ start_init_player_data
   sta Z_PLYR_POS_Y
   lda #$00                              ; player facing direction = UP (0)
   sta Z_PLYR_FACING
-start_enter_screen
-  jmp start_first_person
-  ;jmp start_map
-;*** map mode
-start_map
+start_init_game_data
+  lda #$02                              ; set in first person mode to start with (for testing purposes, should be $00)
+  sta Z_GAME_MODE
+start_change_mode
+  lda Z_GAME_MODE                       ; get game mode setting
+  beq title_screen_entry                ; (auto check) if zero, mode is title screen
+  cmp #$01                              ; check if map mode
+  beq map_entry
+  cmp #$02                              ; check if first person mode
+  beq first_person_entry
+  cmp #$03                              ; check if choice mode
+  beq choice_entry
+  jmp info_entry                        ; otherwise is info mode
+;---------------------------------------
+title_screen_entry
+  jmp *                                 ; TODO - title screen not yet made
+;---------------------------------------
+map_entry
   lda #CN_VID_BANK_2                    ; load code for video bank 2
   jsr set_video_bank                    ; set video bank to 2
   lda #CN_COL_VAL_D_GREY                ; set border colour to dark grey
@@ -248,7 +265,7 @@ start_map
   sta VIC_BG_COL
   ;lda #CN_COL_VAL_D_GREY               ; fill screen with GREY colour, for test purposes
   jsr fill_screen_cols                  ; fill screen with black colour, black characters on black, i.e. nothing visible
-  ldx #>data_scr_map                    ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
+  ;ldx #>data_scr_map                    ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
   ;jsr copy_map_chars_to_screen
 map_loop_update_player
   jsr determine_location_type           ; update player location type pointers to data table
@@ -270,8 +287,14 @@ map_loop_move
   cmp #$FF                              ; check if move failed
   beq map_loop_show_plyr_on_map         ; move did fail, redraw current position as latest position
   jmp map_loop_update_player            ; otherwise update from new move position, new draw and pass to main loop
-;*** first person mode
-start_first_person
+;---------------------------------------
+first_person_entry
+first_pers_loop_update_player
+  lda #CN_VID_BANK_2                    ; load code for video bank 2
+  jsr set_video_bank                    ; set video bank to 2, needed to free table used in determine_location_type from ROM - TODO fix this, move to bank 3!
+  jsr determine_location_type           ; update player location type pointers to data table
+  ;jsr update_player_look_ahead          ; update same for look ahead
+first_pers_loop_prepare_draw
   lda #CN_VID_BANK_1                    ; load code for video bank 1
   jsr set_video_bank                    ; set video bank to 1
   lda #CN_COL_VAL_BLACK                 ; set border col to black
@@ -280,11 +303,16 @@ start_first_person
   sta VIC_BG_COL
 first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
-  ;jsr special_char_test                 ; character test of all special characters for bank 1
-  ;jsr wait_for_key
-  jsr draw_corridor_test                ; test drawing long corridor
-unreachable_infinite_loop
+  jsr draw_corridor                     ; draw detail of corridor at current position
+  ;jsr draw_corridor_test
   jmp *
+;---------------------------------------
+choice_entry
+  jmp *                                 ; TODO - choice mode not yet made
+;---------------------------------------
+info_entry
+  jmp *                                 ; TODO - info mode not yet made
+  
 
 
 ;==========================================================
@@ -715,38 +743,68 @@ draw_two_tone_bg
   jsr fill_mem
   rts
 
-
-; === special_char_test
-;   basic test, print out first $13 (19) characters
-special_char_test
-  lda #CN_BK1_SCR_START_LOW
-  sta Z_ADDR_1_LOW
-  lda #CN_BK1_SCR_START_HIGH
-  sta Z_ADDR_1_HIGH
-  ldy #$00
-special_char_test_loop
-  tya
-  sta (Z_ADDR_1_LOW), Y
-  iny
-  cpy #$13
-  bne special_char_test_loop
-  rts
-
-
-; === draw_corridor_test
-;   test corridor drawing
-draw_corridor_test
-  lda #<data_C_L_NE
-  sta Z_ADDR_1_LOW
-  lda #>data_C_L_NE
-  sta Z_ADDR_1_HIGH
-  jsr draw_from_tables
-  ;
-  lda #<data_C_R_NW
-  sta Z_ADDR_1_LOW
-  lda #>data_C_R_NW
-  sta Z_ADDR_1_HIGH
-  jsr draw_from_tables
+; === draw_corridor
+;   draw corridor on screen form draw tables looked up from matrix by combining current position type and look ahead type
+; assumptions:
+;   current position type and look ahead type are updated and correct
+;   screen is cleared and ready for draw (see draw_two_tone_bg)
+; params:
+;   Z_PLYR_LOC_TYPE, Z_PLYR_LOOK_AHEAD_TYPE
+; uses:
+;   A, X, Y
+;   Z_ADDR_1_LOW / HIGH
+;   Z_ADDR_2_LOW / HIGH
+; side effects:
+;   draw_from_tables:   A, X, Y, Z_TEMP_1 / 2 / 3 / 4, Z_ADDR_1_LOW / HIGH, addr 2, 3
+;   ^ plot_set_xy:      A, X, Y, plot variables
+draw_corridor
+  lda #>data_corridor_matrix            ; load page (high byte) of corridor data matrix into A
+  sta Z_ADDR_2_HIGH                     ; store in addr 2 high byte
+  lda #<data_corridor_matrix            ; load low byte of same in A
+  sta Z_ADDR_2_LOW                      ; store in addr 2 low byte
+  ldx Z_PLYR_LOC_TYPE                   ; load location type in X, for row counting
+  inx                                   ; X++ as an adjustment so we get zero set for free when counting X
+draw_cor_matrix_loop
+  dex                                   ; X--, and auto check if is zero (finished traversing rows)
+  beq draw_cor_matrix_hit               ; if finished search, continue to hit
+  clc                                   ; otherwise clear carry flag before addition
+  adc #$1C                              ; add $1C (28), the number of bytes in a row
+  bcc draw_cor_matrix_loop              ; if didn't cross page boundary, continue with loop
+  inc Z_ADDR_2_HIGH                     ; otherwise increase page
+  jmp draw_cor_matrix_loop              ; then continue with loop
+draw_cor_matrix_hit
+  ldx #$05                              ; X = 5, count number of times + 1 to add Z_PLYR_LOOK_AHEAD_TYPE, so we get + times 4
+draw_cor_row_loop
+  dex                                   ; X--, and auto check if is zero (finished traversing rows)
+  beq draw_cor_row_hit                  ; if finished adding, continue to hit
+  clc                                   ; otherwise clear carry flag before addition
+  adc Z_PLYR_LOOK_AHEAD_TYPE            ; add value at Z_PLYR_LOOK_AHEAD_TYPE
+  bcc draw_cor_row_loop                 ; if didn't cross page boundary, continue with loop
+  inc Z_ADDR_2_HIGH                     ; otherwise increase page
+  jmp draw_cor_row_loop                 ; then continue with loop
+draw_cor_row_hit
+  sta Z_ADDR_2_LOW                      ; finally after all addition (+ Z_PLYR_LOOK_AHEAD_TYPE * 4), save low byte
+  pha                                   ; push addr 2 low byte to stack, to restore after draw_from_tables routine
+  lda Z_ADDR_2_HIGH                     ; load addr 2 high byte
+  pha                                   ; push to stack
+  ldy #$00                              ; load zero into Y for indirect addressing
+  lda (Z_ADDR_2_LOW), Y                 ; get low byte of left side draw table
+  sta Z_ADDR_1_LOW                      ; save in addr 1 low byte
+  iny                                   ; Y++ for next address in table
+  lda (Z_ADDR_2_LOW), Y                 ; get high byte of left side draw table
+  sta Z_ADDR_1_HIGH                     ; save in addr 1 high byte
+  jsr draw_from_tables                  ; draw left side on screen, expects addr 1 to point to table
+  pla                                   ; pull high byte of previous value of addr 2 from stack
+  sta Z_ADDR_2_HIGH                     ; restore to addr 2 high byte
+  pla                                   ; pull addr 2 low byte value from stack
+  sta Z_ADDR_2_LOW                      ; restore to addr 2 low byte
+  ldy #$02                              ; Y = 2, track address of right draw table
+  lda (Z_ADDR_2_LOW), Y                 ; get low byte of right side draw table
+  sta Z_ADDR_1_LOW                      ; save in addr 1 low byte
+  iny                                   ; Y++ for next address in table
+  lda (Z_ADDR_2_LOW), Y                 ; get high byte of right side draw table
+  sta Z_ADDR_1_HIGH                     ; save in addr 1 high byte
+  jsr draw_from_tables                  ; draw right side on screen, expects addr 1 to point to table
   rts
 
 
@@ -835,6 +893,38 @@ draw_from_tab_sec_end
 draw_from_tab_finish
   rts
 
+
+; === special_char_test
+;   basic test, print out first $13 (19) characters
+special_char_test
+  lda #CN_BK1_SCR_START_LOW
+  sta Z_ADDR_1_LOW
+  lda #CN_BK1_SCR_START_HIGH
+  sta Z_ADDR_1_HIGH
+  ldy #$00
+special_char_test_loop
+  tya
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  cpy #$13
+  bne special_char_test_loop
+  rts
+
+
+; === draw_corridor_test
+;   test corridor drawing
+draw_corridor_test
+  lda #<data_L_NEBE
+  sta Z_ADDR_1_LOW
+  lda #>data_L_NEBE
+  sta Z_ADDR_1_HIGH
+  jsr draw_from_tables
+  lda #<data_R_FEBE
+  sta Z_ADDR_1_LOW
+  lda #>data_R_FEBE
+  sta Z_ADDR_1_HIGH
+  jsr draw_from_tables
+  rts
 
 ;==========================================================
 ; ROUTINES - SPECIAL EFFECTS
@@ -2300,7 +2390,63 @@ data_y_movement_facing_dir
 ;     Up  Rt  Lft Dwn
 !byte $00,$01,$01,$02
 
-
+data_corridor_matrix
+; row 0
+!byte <data_L_BE, >data_L_BE, <data_R_BE, >data_R_BE              ; 0, 0 (row, col)
+!byte <data_L_BE, >data_L_BE, <data_R_FEBE, >data_R_FEBE          ; 0, 1
+!byte <data_L_FEBE, >data_L_FEBE, <data_R_BE, >data_R_BE          ; 0, 2
+!byte <data_L_FW, >data_L_FW, <data_R_FE, >data_R_FE              ; 0, 3
+!byte <data_L_FE, >data_L_FE, <data_R_FW, >data_R_FW              ; 0, 4
+!byte <data_L_FEBE, >data_L_FEBE, <data_R_FEBE, >data_R_FEBE      ; 0, 5
+!byte <data_L_FE, >data_L_FE, <data_R_FE, >data_R_FE              ; 0, 6
+; row 1
+!byte <data_L_BE, >data_L_BE, <data_R_NEBE, >data_R_NEBE          ; 1, 0
+!byte <data_L_BE, >data_L_BE, <data_R_NEFEBE, >data_R_NEFEBE      ; 1, 1
+!byte <data_L_FEBE, >data_L_FEBE, <data_R_NEBE, >data_R_NEBE      ; 1, 2
+!byte <data_L_FW, >data_L_FW, <data_R_NEFE, >data_R_NEFE          ; 1, 3
+!byte <data_L_FE, >data_L_FE, <data_R_NEFW, >data_R_NEFW          ; 1, 4
+!byte <data_L_FEBE, >data_L_FEBE, <data_R_NEFEBE, >data_R_NEFEBE  ; 1, 5
+!byte <data_L_FE, >data_L_FE, <data_R_NEFE, >data_R_NEFE          ; 1, 6
+; row 2
+!byte <data_L_NEBE, >data_L_NEBE, <data_R_BE, >data_R_BE          ; 2,0
+!byte <data_L_NEBE, >data_L_NEBE, <data_R_FEBE, >data_R_FEBE      ; 2,1
+!byte <data_L_NEFEBE, >data_L_NEFEBE, <data_R_BE, >data_R_BE      ; 2,2
+!byte <data_L_NEFW, >data_L_NEFW, <data_R_FE, >data_R_FE          ; 2,3
+!byte <data_L_NEFE, >data_L_NEFE, <data_R_FW, >data_R_FW          ; 2,4
+!byte <data_L_NEFEBE, >data_L_NEFEBE, <data_R_FEBE, >data_R_FEBE  ; 2,5
+!byte <data_L_NEFE, >data_L_NEFE, <data_R_FE, >data_R_FE          ; 2,6
+; row 3
+!byte <data_L_NW, >data_L_NW, <data_R_NE, >data_R_NE              ; 3,0
+!byte <data_L_NW, >data_L_NW, <data_R_NE, >data_R_NE              ; 3,1
+!byte <data_L_NW, >data_L_NW, <data_R_NE, >data_R_NE              ; 3,2
+!byte <data_L_NW, >data_L_NW, <data_R_NE, >data_R_NE              ; 3,3
+!byte <data_L_NW, >data_L_NW, <data_R_NE, >data_R_NE              ; 3,4
+!byte <data_L_NW, >data_L_NW, <data_R_NE, >data_R_NE              ; 3,5
+!byte <data_L_NW, >data_L_NW, <data_R_NE, >data_R_NE              ; 3,6
+; row 4
+!byte <data_L_NE, >data_L_NE, <data_R_NW, >data_R_NW              ; 4,0
+!byte <data_L_NE, >data_L_NE, <data_R_NW, >data_R_NW              ; 4,1
+!byte <data_L_NE, >data_L_NE, <data_R_NW, >data_R_NW              ; 4,2
+!byte <data_L_NE, >data_L_NE, <data_R_NW, >data_R_NW              ; 4,3
+!byte <data_L_NE, >data_L_NE, <data_R_NW, >data_R_NW              ; 4,4
+!byte <data_L_NE, >data_L_NE, <data_R_NW, >data_R_NW              ; 4,5
+!byte <data_L_NE, >data_L_NE, <data_R_NW, >data_R_NW              ; 4,6
+; row 5
+!byte <data_L_NEBE, >data_L_NEBE, <data_R_NEBE, >data_R_NEBE      ; 5,0
+!byte <data_L_NEBE, >data_L_NEBE, <data_R_NEFEBE, >data_R_NEFEBE  ; 5,1
+!byte <data_L_NEFEBE, >data_L_NEFEBE, <data_R_NEBE, >data_R_NEBE  ; 5,2
+!byte <data_L_NEFW, >data_L_NEFW, <data_R_NEFE, >data_R_NEFE      ; 5,3
+!byte <data_L_NEFE, >data_L_NEFE, <data_R_NEFW, >data_R_NEFW      ; 5,4
+!byte <data_L_NEFEBE, >data_L_NEFEBE, <data_R_NEFEBE, >data_R_NEFEBE  ; 5,5
+!byte <data_L_NEFE, >data_L_NEFE, <data_R_NEFE, >data_R_NEFE      ; 5,6
+; row 6
+!byte <data_L_NE, >data_L_NE, <data_R_NE, >data_R_NE              ; 6,0
+!byte <data_L_NE, >data_L_NE, <data_R_NE, >data_R_NE              ; 6,1
+!byte <data_L_NE, >data_L_NE, <data_R_NE, >data_R_NE              ; 6,2
+!byte <data_L_NE, >data_L_NE, <data_R_NE, >data_R_NE              ; 6,3
+!byte <data_L_NE, >data_L_NE, <data_R_NE, >data_R_NE              ; 6,4
+!byte <data_L_NE, >data_L_NE, <data_R_NE, >data_R_NE              ; 6,5
+!byte <data_L_NE, >data_L_NE, <data_R_NE, >data_R_NE              ; 6,6
 
 ;==========================================================
 ; STRING DATA
@@ -2431,10 +2577,23 @@ data_scr_map
 ; 2. The byte offset cannot be negative, so the draw order needs to be from top to bottom, and left to right within a row.
 ; 3. The byte offset cannot be greater than $FF, so if there's a larger gap it needs to be split into a separate section.
 
+; LIST OF DRAW SCREENS
+; --------------------
+; === in both left and right, e.g. data_L_BE, data_R_BE
+; BE          back exit
+; NE BE       near exit, back exit
+; NE FE BE    near exit, far exit, back exit
+; FW          far wall
+; NW          near wall
+; NE          near exit
+; FE          far exit
+; FE BE       far exit, back exit
+; NE FW       near exit, far wall
+
 * = $7000
 
 ; corridor left, back exit
-data_C_L_BE
+data_L_BE
 ; top row, main line
 ;    char col len
 !byte $07,$00,$0A
@@ -2476,7 +2635,7 @@ data_C_L_BE
 !byte $00
 
 ; corridor right, back exit
-data_C_R_BE
+data_R_BE
 ; top row, main line
 ;    char col len
 !byte $06,$00,$0A
@@ -2518,7 +2677,7 @@ data_C_R_BE
 !byte $00
 
 ; corridor left, near exit, back exit
-data_C_L_NEBE
+data_L_NEBE
 ; top row, main line
 !byte $07,$00,$04
 !byte $07,$00
@@ -2570,6 +2729,7 @@ data_C_L_NEBE
 !byte $03,$02,$07
 !byte $12,$0E
 !byte $27,$27,$27,$9C,$27,$27,$27
+; floor
 !byte $01,$02,$47
 !byte $13,$0E
 !byte $27,$01
@@ -2589,7 +2749,7 @@ data_C_L_NEBE
 !byte $00
 
 ; corridor right, near exit, back exit
-data_C_R_NEBE
+data_R_NEBE
 ; top row, main line
 !byte $06,$00,$04
 !byte $20,$00
@@ -2661,7 +2821,7 @@ data_C_R_NEBE
 !byte $00
 
 ; corridor left, near exit, far exit, back exit
-data_C_L_NEFEBE
+data_L_NEFEBE
 ; top row, main line
 !byte $07,$00,$04
 !byte $07,$00
@@ -2747,7 +2907,7 @@ data_C_L_NEFEBE
 !byte $00
 
 ; corridor right, near exit, far exit, back exit
-data_C_R_NEFEBE
+data_R_NEFEBE
 ; top row, main line
 !byte $06,$00,$04
 !byte $20,$00
@@ -2833,7 +2993,7 @@ data_C_R_NEFEBE
 !byte $00
 
 ; corridor left, near exit, far exit
-data_C_L_NEFE
+data_L_NEFE
 ; top row, main line
 !byte $07,$00,$04
 !byte $07,$00
@@ -2911,7 +3071,7 @@ data_C_L_NEFE
 !byte $00
 
 ; corridor right, near exit, far exit
-data_C_R_NEFE
+data_R_NEFE
 ; top row, main line
 !byte $06,$00,$04
 !byte $20,$00
@@ -2985,7 +3145,7 @@ data_C_R_NEFE
 !byte $00
 
 ; corridor left, far wall
-data_C_L_FW
+data_L_FW
 ; top row, main line
 !byte $07,$00,$09
 !byte $08,$00
@@ -3031,7 +3191,7 @@ data_C_L_FW
 !byte $00
 
 ; corridor right, far wall
-data_C_R_FW
+data_R_FW
 ; top row, main line
 !byte $06,$00,$09
 !byte $1F,$00
@@ -3077,7 +3237,7 @@ data_C_R_FW
 !byte $00
 
 ; corridor left, near wall
-data_C_L_NW
+data_L_NW
 ; top row, main line
 !byte $07,$00,$06
 !byte $08,$00
@@ -3124,7 +3284,7 @@ data_C_L_NW
 !byte $00
 
 ; corridor right, near wall
-data_C_R_NW
+data_R_NW
 ; top row, main line
 !byte $06,$00,$06
 !byte $1F,$00
@@ -3171,7 +3331,7 @@ data_C_R_NW
 !byte $00
 
 ; corridor left, near exit
-data_C_L_NE
+data_L_NE
 ; top row, main line
 !byte $07,$00,$04
 !byte $07,$00
@@ -3218,7 +3378,7 @@ data_C_L_NE
 !byte $00
 
 ; corridor right, near exit
-data_C_R_NE
+data_R_NE
 ; top row, main line
 !byte $06,$00,$04
 !byte $20,$00
@@ -3264,10 +3424,370 @@ data_C_R_NE
 ; END, null terminated
 !byte $00
 
+; corridor left, far exit, back exit
+data_L_FEBE
+; top row, main line
+!byte $07,$00,$08
+!byte $08,$00
+!byte $29,$29,$29,$29,$29,$29,$29,$29
+; top row, bottom side patch up
+!byte $0A,$00,$08
+!byte $07,$00
+!byte $29,$29,$29,$29,$29,$29,$29,$29
+; top row, top side patch up
+!byte $08,$00,$07
+!byte $09,$00
+!byte $29,$29,$29,$29,$29,$29,$29
+; left turn wall right side
+!byte $0C,$00,$03
+!byte $10,$09
+!byte $28,$28,$28
+; wall front left side
+!byte $12,$00,$00
+!byte $12,$0B
+; wall front left side
+!byte $10,$00,$00
+!byte $11,$0B
+; wall front left side
+!byte $0E,$00,$00
+!byte $12,$0C
+; right turn wall flat
+!byte $01,$06,$01
+!byte $11,$0D
+!byte $28
+; floor border far side and near side
+!byte $03,$02,$0A
+!byte $12,$0E
+!byte $27,$27,$27,$27,$27,$27,$27,$27,$27,$27
+; floor
+!byte $01,$02,$42
+!byte $13,$0E
+!byte $26,$01,$01
+!byte $26,$01,$01
+!byte $25,$01,$01,$01
+!byte $24,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01
+!byte $22,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1E,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; hall end
+!byte $01,$00,$00
+!byte $13,$0D
+; END, null terminated
+!byte $00
+
+; corridor right, far exit, back exit
+data_R_FEBE
+; top row, main line
+!byte $06,$00,$08
+!byte $1F,$00
+!byte $27,$27,$27,$27,$27,$27,$27,$27
+; top row, bottom side patch up
+!byte $0B,$00,$08
+!byte $20,$00
+!byte $27,$27,$27,$27,$27,$27,$27,$27
+; top row, top side patch up
+!byte $09,$00,$07
+!byte $1E,$00
+!byte $27,$27,$27,$27,$27,$27,$27
+; right turn wall left side
+!byte $0D,$00,$03
+!byte $17,$09
+!byte $28,$28,$28
+; wall front right side
+!byte $0D,$00,$01
+!byte $15,$0B
+!byte $28
+; floor border far side and near side
+!byte $05,$02,$09
+!byte $15,$0E
+!byte $52,$29,$29,$29,$29,$29,$29,$29,$29
+; right turn wall flat
+!byte $01,$06,$01
+!byte $16,$0D
+!byte $28
+; wall front right side
+!byte $11,$00,$00
+!byte $15,$0B
+; wall front right side
+!byte $10,$00,$00
+!byte $16,$0B
+; wall front right side
+!byte $0E,$00,$00
+!byte $15,$0C
+; floor
+!byte $01,$02,$42
+!byte $14,$0E
+!byte $28,$01,$01
+!byte $26,$01,$01
+!byte $26,$01,$01,$01
+!byte $25,$01,$01,$01,$01
+!byte $24,$01,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01,$01
+!byte $22,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; hall end
+!byte $01,$00,$00
+!byte $14,$0D
+; END, null terminated
+!byte $00
+
+; corridor left, far exit
+data_L_FE
+; top row, main line
+!byte $07,$00,$08
+!byte $08,$00
+!byte $29,$29,$29,$29,$29,$29,$29,$29
+; top row, bottom side patch up
+!byte $0A,$00,$08
+!byte $07,$00
+!byte $29,$29,$29,$29,$29,$29,$29,$29
+; top row, top side patch up
+!byte $08,$00,$07
+!byte $09,$00
+!byte $29,$29,$29,$29,$29,$29,$29
+; left turn wall right side
+!byte $0C,$00,$03
+!byte $10,$09
+!byte $28,$28,$28
+; wall front left side
+!byte $10,$00,$02
+!byte $11,$0A
+!byte $01,$01
+; right turn wall flat
+!byte $01,$06,$05
+!byte $11,$0D
+!byte $01,$01
+!byte $26,$01,$01
+; floor border far side and near side
+!byte $03,$02,$08
+!byte $10,$10
+!byte $27,$27,$27,$27,$27,$27,$27,$27
+; floor
+!byte $01,$02,$41
+!byte $11,$0F
+!byte $01,$01
+!byte $26,$01,$01
+!byte $25,$01,$01,$01
+!byte $24,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01
+!byte $22,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1E,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; END, null terminated
+!byte $00
+
+; corridor right, far exit
+data_R_FE
+; top row, main line
+!byte $06,$00,$08
+!byte $1F,$00
+!byte $27,$27,$27,$27,$27,$27,$27,$27
+; top row, bottom side patch up
+!byte $0B,$00,$08
+!byte $20,$00
+!byte $27,$27,$27,$27,$27,$27,$27,$27
+; top row, top side patch up
+!byte $09,$00,$07
+!byte $1E,$00
+!byte $27,$27,$27,$27,$27,$27,$27
+; right turn wall left side
+!byte $0D,$00,$03
+!byte $17,$09
+!byte $28,$28,$28
+; floor border far side and near side
+!byte $05,$02,$08
+!byte $17,$10
+!byte $29,$29,$29,$29,$29,$29,$29,$29
+; right turn wall flat
+!byte $01,$06,$05
+!byte $14,$0D
+!byte $01,$01
+!byte $26,$01,$01
+; wall front right side
+!byte $10,$00,$02
+!byte $14,$0A
+!byte $01,$01
+; floor
+!byte $01,$02,$41
+!byte $14,$0F
+!byte $01,$01
+!byte $26,$01,$01
+!byte $26,$01,$01,$01
+!byte $25,$01,$01,$01,$01
+!byte $24,$01,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01,$01
+!byte $22,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; END, null terminated
+!byte $00
+
+; corridor near exit, far wall
+data_L_NEFW
+; top row, main line
+!byte $07,$00,$04
+!byte $07,$00
+!byte $29,$29,$29,$29
+; top row, bottom side patch up
+!byte $0A,$00,$04
+!byte $06,$00
+!byte $29,$29,$29,$29
+; top row, top side patch up
+!byte $08,$00,$03
+!byte $08,$00
+!byte $29,$29,$29
+; top row, far top section
+!byte $07,$00,$01
+!byte $10,$08
+!byte $29
+; top row, far bottom side patch up
+!byte $0A,$00,$00
+!byte $10,$09
+; top row, far top side patch up
+!byte $08,$00,$01
+!byte $10,$07
+!byte $29
+; left turn wall join
+!byte $12,$00,$00
+!byte $0F,$07
+; wall front left side
+!byte $0C,$00,$02
+!byte $11,$0A
+!byte $28,$28
+; left turn wall top
+!byte $10,$00,$02
+!byte $0C,$07
+!byte $01,$01
+; wall front left side
+!byte $10,$00,$01
+!byte $12,$0A
+!byte $01
+; right turn wall flat
+!byte $01,$06,$03
+!byte $12,$0D
+!byte $01
+!byte $27,$01
+; left turn wall left side
+!byte $0D,$00,$04
+!byte $0F,$08
+!byte $28,$28,$28,$28
+; left turn wall right side
+!byte $0C,$00,$07
+!byte $0B,$05
+!byte $28,$28,$28,$28,$28,$28,$28
+; left turn wall flat
+!byte $01,$06,$0E
+!byte $0C,$0D
+!byte $01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01
+; floor border far side and near side
+!byte $03,$02,$06
+!byte $11,$0F
+!byte $27,$27,$9C,$27,$27,$27
+; floor
+!byte $01,$02,$46
+!byte $12,$0F
+!byte $01
+!byte $26,$01,$01
+!byte $25,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1E,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; END, null terminated
+!byte $00
+
+; corridor right, near exit, far wall
+data_R_NEFW
+; top row, main line
+!byte $06,$00,$04
+!byte $20,$00
+!byte $27,$27,$27,$27
+; top row, bottom side patch up
+!byte $0B,$00,$04
+!byte $21,$00
+!byte $27,$27,$27,$27
+; top row, top side patch up
+!byte $09,$00,$03
+!byte $1F,$00
+!byte $27,$27,$27
+; top row, far top section
+!byte $06,$00,$01
+!byte $17,$08
+!byte $27
+; top row, far bottom side patch up
+!byte $0B,$00,$00
+!byte $17,$09
+; top row, far top side patch up
+!byte $09,$00,$01
+!byte $17,$07
+!byte $27
+; right turn wall join
+!byte $11,$00,$00
+!byte $18,$07
+; right turn wall top
+!byte $10,$00,$02
+!byte $19,$07
+!byte $01,$01
+; right turn wall left side
+!byte $0C,$00,$04
+!byte $18,$08
+!byte $28,$28,$28,$28
+; right turn wall right side
+!byte $0D,$00,$07
+!byte $1C,$05
+!byte $28,$28,$28,$28,$28,$28,$28
+; wall front right side
+!byte $0D,$00,$02
+!byte $16,$0A
+!byte $28,$28
+; wall front left side
+!byte $10,$00,$01
+!byte $14,$0A
+!byte $01
+; right turn wall flat
+!byte $01,$06,$03
+!byte $14,$0D
+!byte $01
+!byte $27,$01
+; right turn wall flat
+!byte $01,$06,$0E
+!byte $19,$0D
+!byte $01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01,$26,$01,$01
+; floor border far side and near side
+!byte $05,$02,$06
+!byte $16,$0F
+!byte $29,$29,$A4,$29,$29,$29
+; floor
+!byte $01,$02,$47
+!byte $14,$0F
+!byte $01
+!byte $27,$01,$01
+!byte $26,$01,$01,$01
+!byte $25,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01
+!byte $21,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $20,$01,$01,$01,$01,$01,$01,$01,$01,$01
+!byte $1F,$01,$01,$01,$01,$01,$01,$01,$01,$01,$01
+; END, null terminated
+!byte $00
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_draw_data    ; = $79b7 in this version
-                                ;   that 2487 bytes, recording 7 different screen halfs mirrored on both sizes
+debug_label_end_of_draw_data    ; = $7db6 in this version.
+                                ;   that's 3510 bytes, recording 10 different screen halfs mirrored on both sizes,
+                                ;   meaning we're using about 1+1/3 pages per full screen, in terms of "compression"
 
 ;==========================================================
 ; IMAGE DATA
