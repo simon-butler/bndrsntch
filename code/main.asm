@@ -20,8 +20,9 @@
 ; $3000 - $3200     : game logic tables and data, and strings
 ; $4400 - $47FF     : screen for first person mode (bank 1)
 ; $5000 - $57FF     : character map for first person (bank 1) written directly by loader
-; $7000 - $72FF     ; first person drawing data tables
+; $7000 - $72FF     : first person drawing data tables
 ; $8400 - $87FF     : screen for map mode (bank 2) written to directly by loader
+; $C000 - $C3FF     : colour map copy and image data
 ; 
 ;==========================================================
 
@@ -113,6 +114,9 @@ CN_COL_MEM_END_HIGH     = $DB
 ; PESCII characters
 CN_CHAR_SPACE           = $20
 CN_CHAR_BLOCK           = $A0
+
+; ASCII characters
+CN_ASCII_M              = $4D
 
 ; special characters, used in video bank 1 char set
 CN_SPEC_CHAR_BLANK      = $00
@@ -230,7 +234,7 @@ Z_TABLE_START           = $80           ; not yet used, but possible idea
 start_game
   jsr init_helper_vars                  ; some initial set up so some routines work correctly
   jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
-  jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
+  ;jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
   ;jsr wait_for_key
 start_init_player_data
   lda #$07                              ; player X pos = 07
@@ -240,23 +244,24 @@ start_init_player_data
   lda #$00                              ; player facing direction = UP (0)
   sta Z_PLYR_FACING
 start_init_game_data
-  lda #$02                              ; set in first person mode to start with (for testing purposes, should be $00)
+  lda #$01                              ; set in map mode to start with (for testing purposes, should be $00, but not $02)
   sta Z_GAME_MODE
 start_change_mode
   lda Z_GAME_MODE                       ; get game mode setting
   beq title_screen_entry                ; (auto check) if zero, mode is title screen
   cmp #$01                              ; check if map mode
-  beq map_entry
+  beq map_entry_first_time
   cmp #$02                              ; check if first person mode
   beq first_person_entry
-  cmp #$03                              ; check if choice mode
-  beq choice_entry
-  jmp info_entry                        ; otherwise is info mode
+  ;cmp #$03                              ; check if choice mode
+  ;beq choice_entry
+  ;jmp info_entry                        ; otherwise is info mode
+  jmp *
 ;---------------------------------------
 title_screen_entry
   jmp *                                 ; TODO - title screen not yet made
 ;---------------------------------------
-map_entry
+map_entry_first_time
   lda #CN_VID_BANK_2                    ; load code for video bank 2
   jsr set_video_bank                    ; set video bank to 2
   lda #CN_COL_VAL_D_GREY                ; set border colour to dark grey
@@ -265,8 +270,14 @@ map_entry
   sta VIC_BG_COL
   ;lda #CN_COL_VAL_D_GREY               ; fill screen with GREY colour, for test purposes
   jsr fill_screen_cols                  ; fill screen with black colour, black characters on black, i.e. nothing visible
-  ;ldx #>data_scr_map                    ; put high byte (page) of screen map data in X, setup for copy_map_chars_to_screen
-  ;jsr copy_map_chars_to_screen
+  jmp map_loop_update_player            ; skip to main map loop
+map_entry
+  lda #CN_VID_BANK_2                    ; load code for video bank 2
+  jsr set_video_bank                    ; set video bank to 2
+  lda #CN_COL_VAL_D_GREY                ; set border colour to dark grey
+  sta VIC_BORDER_COL
+  lda #CN_COL_VAL_BLACK                 ; set background colour to black
+  sta VIC_BG_COL
 map_loop_update_player
   jsr determine_location_type           ; update player location type pointers to data table
   jsr update_player_look_ahead          ; update same for look ahead
@@ -275,7 +286,9 @@ map_loop_show_plyr_on_map
   jsr write_player_facing_str           ; write "FACING XXXX" on map, where "XXXX" is direction (north, east, etc)
 map_loop_move
   jsr wait_for_key                      ; wait for a key from user
-  ldx #<data_key_codes_to_facing_dir    ; set up LOW / HIGH addr of key to facing direction mapping
+  cmp #CN_ASCII_M                       ; check if char is 'M', to switch modes
+  beq map_goto_first_person             ; if is then switch to first person
+  ldx #<data_key_codes_to_facing_dir    ; otherwise, set up LOW / HIGH addr of key to facing direction mapping
   ldy #>data_key_codes_to_facing_dir
   jsr match_byte_from_list              ; try to match key to facing direction
   cmp #$FF                              ; check if match failed
@@ -287,6 +300,11 @@ map_loop_move
   cmp #$FF                              ; check if move failed
   beq map_loop_show_plyr_on_map         ; move did fail, redraw current position as latest position
   jmp map_loop_update_player            ; otherwise update from new move position, new draw and pass to main loop
+map_goto_first_person
+  jsr save_map_highlights               ; first save map highlights (colours)
+  lda #$02                              ; change mode variable to $02 for first person
+  sta Z_GAME_MODE
+  ; allow to continue to first person entry point
 ;---------------------------------------
 first_person_entry
 first_pers_prepare_draw
@@ -309,6 +327,11 @@ first_pers_draw_scr
   ;jsr draw_corridor_test
 first_pers_loop_move
   jsr wait_for_key                      ; wait for a key from user
+  cmp #CN_ASCII_M                       ; check if char is 'M', to switch modes
+  beq first_pers_goto_map               ; if is then switch to map mode
+  pha                                   ; push A (value of key press) to stack
+  jsr update_stored_map_highlights      ; otherwise moved successfully, update map highlights for map mode coherence
+  pla                                   ; pull value of key press to A from stack
   ldx #<data_key_codes_to_facing_dir    ; set up LOW / HIGH addr of key to facing direction mapping
   ldy #>data_key_codes_to_facing_dir
   jsr match_byte_from_list              ; try to match key to facing direction
@@ -316,8 +339,15 @@ first_pers_loop_move
   beq first_pers_loop_move              ; no match, continue getting key : TODO show bad input message
   jsr move_player_in_dir                ; try to move player in direction specified
   cmp #$FF                              ; check if move failed
-  ;beq first_pers_loop_move_fail         ; move did fail, TODO show message to user, cannot go that way
+  beq first_pers_loop_move_fail         ; move did fail, TODO show message to user, cannot go that way
+  jsr update_stored_map_highlights      ; otherwise moved successfully, update map highlights for map mode coherence
+first_pers_loop_move_fail
   jmp first_pers_loop_update_player     ; otherwise update from new move position, new draw and pass to main loop
+first_pers_goto_map
+  jsr restore_map_highlights            ; restore map highlights (colours)
+  lda #$01                              ; change mode variable to $01 for map mode
+  sta Z_GAME_MODE
+  jmp map_entry                         ; enter map mode
 ;---------------------------------------
 choice_entry
   jmp *                                 ; TODO - choice mode not yet made
@@ -328,7 +358,7 @@ info_entry
 
 
 ;==========================================================
-; ROUTINES - HIGH LEVEL
+; ROUTINES - GAME LOGIC
 ;==========================================================
 
 ; these routines perform some common game particular function,
@@ -482,7 +512,7 @@ upd_plyr_look_ahead_err
   jsr fill_screen_cols
   jmp *
 upd_plyr_look_ahead_off
-  lda #$00
+  lda #$FF
   sta Z_PLYR_LOOK_AHEAD_TYPE
   sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
   sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
@@ -714,6 +744,92 @@ show_pl_facing_str_finish
   rts
 
 
+; === save_map_highlights
+;   save colour map for map
+; notes:
+;   for the moment this just copies it exactly, but in future it would be more efficient for memory to just use 1 bit per scr char.
+;   map is revealed to player by colouring map, when switching mode need to save and restore this
+; params:
+;   none
+save_map_highlights
+  lda #<data_col_map_backup         ; store low byte of mem storage in addr 1 low byte
+  sta Z_ADDR_1_LOW
+  lda #>data_col_map_backup         ; store high byte of mem storage in addr 1 high byte
+  sta Z_ADDR_1_HIGH
+  lda #<data_col_map_backup         ; load low byte of mem storage
+  clc                               ; clear carry flag before addition
+  adc #$E8                          ; add $E8 to low byte, puts to end of block of 1000 bytes (screen size)
+  sta Z_ADDR_2_LOW                  ; store in addr 2 low byte
+  lda #>data_col_map_backup         ; load high byte of mem storage
+  clc                               ; clear carry flag
+  adc #$03                          ; add $03 to high byte, puts to end of block of 1000 bytes
+  sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
+  lda #CN_COL_MEM_START_LOW         ; store low byte of memory storage start in addr 3 low byte
+  sta Z_ADDR_3_LOW
+  lda #CN_COL_MEM_START_HIGH        ; store high byte of memory storage start in addr 3 high byte
+  sta Z_ADDR_3_HIGH
+  jsr copy_mem                      ; copy col mem to storage mem
+  rts
+
+
+; === restore_map_highlights
+;   save colour map for map
+; notes:
+;   for the moment this just copies it exactly, but in future it would be more efficient for memory to just use 1 bit per scr char.
+;   map is revealed to player by colouring map, when switching mode need to save and restore this
+; assumptions:
+;   data_col_map_backup should start at start of a page
+; params:
+;   none
+restore_map_highlights
+  lda #CN_COL_MEM_START_LOW         ; store low byte of col mem start in addr 1 low byte
+  sta Z_ADDR_1_LOW
+  lda #CN_COL_MEM_START_HIGH        ; store high byte of col mem start in addr 1 high byte
+  sta Z_ADDR_1_HIGH
+  lda #CN_COL_MEM_END_LOW           ; store low byte of col mem end in addr 2 low byte
+  sta Z_ADDR_2_LOW
+  lda #CN_COL_MEM_END_HIGH          ; store high byte of col mem end in addr 2 high byte
+  sta Z_ADDR_2_HIGH
+  lda #<data_col_map_backup         ; store low byte of memory storage start in addr 3 low byte
+  sta Z_ADDR_3_LOW
+  lda #>data_col_map_backup         ; store high byte of memory storage start in addr 3 high byte
+  sta Z_ADDR_3_HIGH
+  jsr copy_mem
+  rts
+
+
+; === update_stored_map_highlights
+;   update the highlights stored memory map when not actively in use (i.e. when in first person mode)
+; params:
+;   current player variables
+; uses:
+;   A, Y
+;   plot variables
+;   stack
+; side effects:
+;   plot_set_xy:      A, X, Y, plot variables
+;   stack is used and assumed coherent
+; returns:
+;   none
+update_stored_map_highlights
+  jsr get_video_bank                ; get current video bank code (to restore plot bank after routine work)
+  pha                               ; push current video bank code to stack
+  lda #<data_col_map_backup         ; store low byte of col map mem storage for plot routines
+  sta Z_SCR_START_LOW
+  lda #>data_col_map_backup         ; store high byte of col map mem storage for plot routines
+  sta Z_SCR_START_HIGH
+  lda Z_PLYR_POS_X                  ; store player x in plot x
+  sta Z_SCR_X
+  lda Z_PLYR_POS_Y                  ; store player y in plot y
+  sta Z_SCR_Y
+  jsr plot_set_xy
+  ldy #$00                          ; Y = 0, for indirect addressing
+  lda #CN_COL_VAL_D_GREY            ; load drak grey colour
+  sta (Z_SCR_LOW_BYTE), Y           ; store grey in map col mem storage
+  pla                               ; pull video bank code from stack
+  jsr plot_set_bank                 ; restore video bank used by plot routines
+  rts
+
 ;==========================================================
 ; ROUTINES - FIRST PERSON DRAWING
 ;==========================================================
@@ -785,6 +901,11 @@ draw_cor_matrix_loop
   inc Z_ADDR_2_HIGH                     ; otherwise increase page
   jmp draw_cor_matrix_loop              ; then continue with loop
 draw_cor_matrix_hit
+  pha                                   ; push A to allow us to check look ahead type
+  lda Z_PLYR_LOOK_AHEAD_TYPE            ; load look ahead type
+  cmp #$FF                              ; check if unset at $FF
+  beq draw_cor_row_skip                 ; if so then skip, set to $00
+  pla                                   ; otherwise pull A, and continue to add for look ahead
   ldx #$05                              ; X = 5, count number of times + 1 to add Z_PLYR_LOOK_AHEAD_TYPE, so we get + times 4
 draw_cor_row_loop
   dex                                   ; X--, and auto check if is zero (finished traversing rows)
@@ -794,6 +915,8 @@ draw_cor_row_loop
   bcc draw_cor_row_loop                 ; if didn't cross page boundary, continue with loop
   inc Z_ADDR_2_HIGH                     ; otherwise increase page
   jmp draw_cor_row_loop                 ; then continue with loop
+draw_cor_row_skip
+  pla                                   ; otherwise pull A, but don't add anything to it for look ahead, is disabled
 draw_cor_row_hit
   sta Z_ADDR_2_LOW                      ; finally after all addition (+ Z_PLYR_LOOK_AHEAD_TYPE * 4), save low byte
   pha                                   ; push addr 2 low byte to stack, to restore after draw_from_tables routine
@@ -1276,11 +1399,11 @@ enable_video_bank_selection
 ; === set_video_bank
 ;   set the video bank the VIC is pointing to
 ; params:
-;   A - bank to select (must be number between $00 and $03 inclusive)
+;   A - bank code to select (must be number between $00 and $03 inclusive)
 ; uses:
 ;   A, Z_TEMP_1
 ; side effects:
-;   none
+;   set plot bank also
 ; returns:
 ;   none
 set_video_bank
@@ -1291,6 +1414,22 @@ set_video_bank
   sta VIC_CIA2_BANK_SELECT      ; write to video bank selection reg
   lda Z_TEMP_1                  ; load video bank number to compare so screen start can be updated
   jsr plot_set_bank             ; switch bank for plot routines
+  rts
+
+
+; === get_video_bank
+;   get the current video bank the VIC is pointing to
+; params:
+;   none
+; uses:
+;   A
+; side effects:
+;   none
+; returns:
+;   A - select number code
+get_video_bank
+  lda VIC_CIA2_BANK_SELECT      ; read value of bank selection register
+  and #$FC                      ; mask out bits 0, 1 with AND
   rts
 
 
@@ -3818,6 +3957,19 @@ data_R_NEFW
 debug_label_end_of_draw_data    ; = $7db6 in this version.
                                 ;   that's 3510 bytes, recording 10 different screen halfs mirrored on both sizes,
                                 ;   meaning we're using about 1+1/3 pages per full screen, in terms of "compression"
+
+;==========================================================
+; MAPS
+;==========================================================
+
+* = $C000
+
+; colour map compressed copy, 1000 characters
+data_col_map_backup
+; "reserving" data, not really done but use for label
+
+
+;* = $C3E8
 
 ;==========================================================
 ; IMAGE DATA
