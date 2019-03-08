@@ -230,7 +230,7 @@ Z_TABLE_START           = $80           ; not yet used, but possible idea
 start_game
   jsr init_helper_vars                  ; some initial set up so some routines work correctly
   jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
-  ;jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
+  jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
   ;jsr wait_for_key
 start_init_player_data
   lda #$07                              ; player X pos = 07
@@ -289,23 +289,35 @@ map_loop_move
   jmp map_loop_update_player            ; otherwise update from new move position, new draw and pass to main loop
 ;---------------------------------------
 first_person_entry
-first_pers_loop_update_player
-  lda #CN_VID_BANK_2                    ; load code for video bank 2
-  jsr set_video_bank                    ; set video bank to 2, needed to free table used in determine_location_type from ROM - TODO fix this, move to bank 3!
-  jsr determine_location_type           ; update player location type pointers to data table
-  ;jsr update_player_look_ahead          ; update same for look ahead
-first_pers_loop_prepare_draw
+first_pers_prepare_draw
   lda #CN_VID_BANK_1                    ; load code for video bank 1
   jsr set_video_bank                    ; set video bank to 1
   lda #CN_COL_VAL_BLACK                 ; set border col to black
   sta VIC_BORDER_COL
   lda #CN_COL_VAL_L_BLUE                ; set background col to light blue
   sta VIC_BG_COL
+first_pers_loop_update_player
+  lda #CN_VID_BANK_2                    ; load code for video bank 2
+  jsr plot_set_bank                     ; set bank for plot read to 2 (doesn't set screen), map data stored here  
+  jsr determine_location_type           ; update player location type pointers to data table
+  jsr update_player_look_ahead          ; update same for look ahead
+  lda #CN_VID_BANK_1                    ; load code for video bank 2
+  jsr plot_set_bank                     ; restore bank for plot read to 1
 first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
   jsr draw_corridor                     ; draw detail of corridor at current position
   ;jsr draw_corridor_test
-  jmp *
+first_pers_loop_move
+  jsr wait_for_key                      ; wait for a key from user
+  ldx #<data_key_codes_to_facing_dir    ; set up LOW / HIGH addr of key to facing direction mapping
+  ldy #>data_key_codes_to_facing_dir
+  jsr match_byte_from_list              ; try to match key to facing direction
+  cmp #$FF                              ; check if match failed
+  beq first_pers_loop_move              ; no match, continue getting key : TODO show bad input message
+  jsr move_player_in_dir                ; try to move player in direction specified
+  cmp #$FF                              ; check if move failed
+  ;beq first_pers_loop_move_fail         ; move did fail, TODO show message to user, cannot go that way
+  jmp first_pers_loop_update_player     ; otherwise update from new move position, new draw and pass to main loop
 ;---------------------------------------
 choice_entry
   jmp *                                 ; TODO - choice mode not yet made
@@ -470,7 +482,7 @@ upd_plyr_look_ahead_err
   jsr fill_screen_cols
   jmp *
 upd_plyr_look_ahead_off
-  lda #$FF
+  lda #$00
   sta Z_PLYR_LOOK_AHEAD_TYPE
   sta Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW
   sta Z_PLYR_LOOK_AHEAD_TY_ADDR_HIGH
@@ -1278,37 +1290,53 @@ set_video_bank
   ora Z_TEMP_1                  ; set video bank by ORing against number saved in temp 1
   sta VIC_CIA2_BANK_SELECT      ; write to video bank selection reg
   lda Z_TEMP_1                  ; load video bank number to compare so screen start can be updated
+  jsr plot_set_bank             ; switch bank for plot routines
+  rts
+
+
+; === plot_set_bank
+;   sets the video bank used for plot routines
+; params:
+;   A - bank to select (must be number between $00 and $03 inclusive)
+; uses:
+;   A
+; side effects:
+;   none
+; returns:
+;   Z_SCR_START_LOW / HIGH changed to point at correct selected bank screen memory
+plot_set_bank
   cmp #CN_VID_BANK_1            ; check if bank 1
-  beq set_video_bank_1
+  beq plot_set_bank_1
   cmp #CN_VID_BANK_2            ; check if bank 2
-  beq set_video_bank_2
+  beq plot_set_bank_2
   cmp #CN_VID_BANK_3            ; check if bank 3
-  beq set_video_bank_3
-set_video_bank_0                ; otherwise continue to set for bank 0
+  beq plot_set_bank_3
+plot_set_bank_0                ; otherwise continue to set for bank 0
   lda #CN_BK0_SCR_START_LOW
   sta Z_SCR_START_LOW
   lda #CN_BK0_SCR_START_HIGH
   sta Z_SCR_START_HIGH
-  jmp set_video_bank_finish
-set_video_bank_1                ; set for bank 1
+  jmp plot_set_bank_finish
+plot_set_bank_1                ; set for bank 1
   lda #CN_BK1_SCR_START_LOW
   sta Z_SCR_START_LOW
   lda #CN_BK1_SCR_START_HIGH
   sta Z_SCR_START_HIGH
-  jmp set_video_bank_finish
-set_video_bank_2                ; set for bank 2
+  jmp plot_set_bank_finish
+plot_set_bank_2                ; set for bank 2
   lda #CN_BK2_SCR_START_LOW
   sta Z_SCR_START_LOW
   lda #CN_BK2_SCR_START_HIGH
   sta Z_SCR_START_HIGH
-  jmp set_video_bank_finish
-set_video_bank_3                ; set for bank 3
+  jmp plot_set_bank_finish
+plot_set_bank_3                ; set for bank 3
   lda #CN_BK3_SCR_START_LOW
   sta Z_SCR_START_LOW
   lda #CN_BK3_SCR_START_HIGH
   sta Z_SCR_START_HIGH
-set_video_bank_finish
+plot_set_bank_finish
   rts
+
 
 ; === wait_for_key
 ;   loop continuously until key pressed
@@ -1521,6 +1549,8 @@ draw_chars_list_wc_next
 
 ; === plot_set_xy
 ;   sets screen draw xy position, including color map position
+; assumptions:
+;   Z_SCR_START_LOW / HIGH are set correctly
 ; params:
 ;   Z_SCR_X - x value
 ;   Z_SCR_Y - y value
