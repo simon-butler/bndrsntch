@@ -60,6 +60,8 @@ VIC_SPRITE_ENABLE       = $D015
 VIC_SPRITE_COL_0        = $D027
 VIC_SPRITE_POS_REGS     = $D000
 VIC_SPRITE_MSB_REG      = $D010
+VIC_SPRITE_EXP_HORZ     = $D01D     ; horizontal expand register
+VIC_SPRITE_EXP_VERT     = $D017     ; horizontal expand register
 
 ;==========================================================
 ; PRE-PROCESSED CONSTANTS
@@ -156,7 +158,11 @@ CN_XY_MAP_STR_LINE_1_Y  = $0B
 
 SP_POS_PAX_FAR_X        = $AC
 SP_POS_PAX_FAR_Y        = $84
+SP_POS_PAX_NEAR_X       = $A0
+SP_POS_PAX_NEAR_Y       = $74
 
+GM_PAX_LOC_X            = $0A
+GM_PAX_LOC_Y            = $14
 
 ;==========================================================
 ; ZERO PAGE MAP
@@ -339,8 +345,7 @@ first_pers_loop_update_player
 first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
   jsr draw_corridor                     ; draw detail of corridor at current position
-  ;jsr draw_corridor_test
-  jsr draw_pax_far                      ; test draw Pax
+  jsr draw_fp_sprites                   ; draw first person sprites
 first_pers_loop_move
   jsr wait_for_key                      ; wait for a key from user
   cmp #CN_ASCII_M                       ; check if char is 'M', to switch modes
@@ -1044,6 +1049,35 @@ draw_from_tab_sec_end
 draw_from_tab_finish
   rts
 
+
+; === draw_fp_sprites
+;   draw first person sprites. rough draft of system to use, has Pax only right now
+draw_fp_sprites
+  lda Z_PLYR_LOOK_AHEAD_X         ; first check if look ahead x matches Pax location x
+  cmp #GM_PAX_LOC_X
+  bne draw_fp_sprites_chk2        ; if not jump to check 2
+  lda Z_PLYR_LOOK_AHEAD_Y         ; check if look ahead y matches Pax location y
+  cmp #GM_PAX_LOC_Y
+  bne draw_fp_sprites_chk2        ; if not jump to check 2
+  jsr draw_pax_far                ; otherwise there's a match, draw pax far away (in look ahead position)
+  jmp draw_fp_sprites_finish      ; then finish
+draw_fp_sprites_chk2
+  lda Z_PLYR_POS_X                ; first check if player pos x matches Pax location x
+  cmp #GM_PAX_LOC_X
+  bne draw_fp_sprites_none        ; if not jump to turn off sprites
+  lda Z_PLYR_POS_Y                ; check if player pos y matches Pax location y
+  cmp #GM_PAX_LOC_Y
+  bne draw_fp_sprites_none        ; if not jump to turn off sprites
+  jsr draw_pax_near               ; otherwise there's a match, draw pax near (on this location, next action should be Pax talks)
+  jmp draw_fp_sprites_finish      ; then finish
+draw_fp_sprites_none
+  jsr wait_for_end_raster         ; wait until raster scan lines reach end of screen, to avoid visual tear
+  lda #$00                        ; A = 0
+  sta VIC_SPRITE_ENABLE           ; turn all sprites off
+draw_fp_sprites_finish
+  rts
+
+
 ; === draw_pax_far
 draw_pax_far
   lda #<data_draw_far_pax_bg
@@ -1051,24 +1085,52 @@ draw_pax_far
   lda #>data_draw_far_pax_bg
   sta Z_ADDR_1_HIGH
   jsr draw_from_tables
+  lda #$00
+  ldx #SP_POS_PAX_FAR_X
+  ldy #SP_POS_PAX_FAR_Y
   jsr draw_sprite_pax
+  rts
+
+; === draw_pax_near
+draw_pax_near
+  lda #<data_draw_near_pax_bg
+  sta Z_ADDR_1_LOW
+  lda #>data_draw_near_pax_bg
+  sta Z_ADDR_1_HIGH
+  jsr draw_from_tables
+  lda #$01
+  ldx #SP_POS_PAX_NEAR_X
+  ldy #SP_POS_PAX_NEAR_Y
+  jsr draw_sprite_pax
+  rts
 
 ; === draw_sprite_pax
 ;   draw Pax character sprite on screen
 ; params:
 ;   A - $00 then draw far away, non $00 then draw close
+;   X - x position of top left (assumes does not need MSB)
+;   Y - y position of top left
 ; uses:
-;   A, X
-;   Z_TEMP_1
+;   A, X, Y
+;   Z_TEMP_1 / 2 / 3
 ; side effects:
 ;   wait_for_end_raster:    A
 ; returns:
 ;   none
 draw_sprite_pax
-  sta Z_TEMP_1
+  sta Z_TEMP_1                    ; store near (double size) flag from A in temp 1
+  stx Z_TEMP_2                    ; store x pos from X in temp 2
+  sty Z_TEMP_3                    ; store y pos from Y in temp 3
   jsr wait_for_end_raster         ; wait until raster scan lines reach end of screen, to avoid visual tear
   lda #$00                        ; A = 0
   sta VIC_SPRITE_ENABLE           ; turn all sprites off
+  lda Z_TEMP_1                    ; get near flag from temp 1 to A
+  cmp #$00                        ; check if near flag not set
+  beq draw_sprite_pax_cont        ; if unset, continue
+  lda #$07                        ; otherwise set A to $07, set bits 0, 1, 2
+draw_sprite_pax_cont
+  sta VIC_SPRITE_EXP_HORZ         ; set sprite horizontal expansion register (A already set)
+  sta VIC_SPRITE_EXP_VERT         ; set sprite vertical expansion register
   ldx #$80                        ; load first sprite pointer to first sprite (head) in X (used for inx convienence)
   stx CN_BK1_SPRITE_POINTER_0     ; store in sprite pointer 0
   inx                             ; X++, $81, next sprite of Pax (body)
@@ -1079,17 +1141,28 @@ draw_sprite_pax
   sta VIC_SPRITE_COL_0            ; set sprite 0 col white
   sta VIC_SPRITE_COL_0 + 1        ; set sprite 1 col white
   sta VIC_SPRITE_COL_0 + 2        ; set sprite 2 col white
-  lda #SP_POS_PAX_FAR_X            ; load x position of Pax vertical sprites
+  lda Z_TEMP_2                    ; load x position of Pax vertical sprites from temp 2
   sta VIC_SPRITE_POS_REGS         ; store X in x pos for sprite 0
   sta VIC_SPRITE_POS_REGS + 2     ; same for sprite 1 (pos registers in order x0, y0, x1, y1, x2, ...)
   sta VIC_SPRITE_POS_REGS + 4     ; same for sprite 2
-  lda #SP_POS_PAX_FAR_Y            ; load y position of first Pax sprite
+  lda Z_TEMP_3                    ; load y position of Pax vertical sprites from temp 3
   sta VIC_SPRITE_POS_REGS + 1     ; store Y in y pos for sprite 0
+  ldx Z_TEMP_1                    ; get near flag from temp 1 to X
   clc                             ; clear carry flag before addition
   adc #$15                        ; A += $15 (21), calculate y pos of next sprite
+  cpx #$00                         ; check if near flag not set
+  beq draw_sprite_pax_y2          ; if not set, continue to y2
+  clc                             ; otherwise clear carry flag before addition
+  adc #$15                        ; and A += $15 again
+draw_sprite_pax_y2
   sta VIC_SPRITE_POS_REGS + 3     ; store Y in y pos for sprite 1
   clc                             ; clear carry flag before addition
   adc #$15                        ; A += $15 (21), calculate y pos of next sprite
+  cpx #$00                         ; check if near flag not set
+  beq draw_sprite_pax_y3          ; if not set, continue to y3
+  clc                             ; otherwise clear carry flag before addition
+  adc #$15                        ; and A += $15 again
+draw_sprite_pax_y3
   sta VIC_SPRITE_POS_REGS + 5     ; store Y in y pos for sprite 2
   lda #$00                        ; A = 0, for MSB clearing
   sta VIC_SPRITE_MSB_REG          ; clear sprite positioning MSB
@@ -4088,15 +4161,36 @@ data_R_NEFW
 
 ; background for far away Pax drawing, black out behind to match original effect
 data_draw_far_pax_bg
-!byte $01,$00,$13
+!byte $01,$00,$15
 !byte $13,$0A
 !byte $01
 !byte $27,$01
 !byte $27,$01
 !byte $26,$01,$01,$01
 !byte $25,$01,$01,$01
-!byte $26,$01
+!byte $25,$01,$01,$01
+!byte $25,$01,$01,$01
+; END, null terminated
+!byte $00
+
+; background for far away Pax drawing, black out behind to match original effect
+data_draw_near_pax_bg
+!byte $01,$00,$3D
+!byte $13,$08
+!byte $01
 !byte $26,$01,$01,$01
+!byte $25,$01,$01,$01
+!byte $25,$01,$01,$01
+!byte $25,$01,$01,$01
+!byte $24,$01,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01
+!byte $23,$01,$01,$01,$01,$01
+!byte $24,$01,$01,$01
+!byte $25,$01,$01,$01
+!byte $25,$01,$01,$01
+!byte $25,$01,$01,$01
+!byte $25,$01,$01,$01
 ; END, null terminated
 !byte $00
 
