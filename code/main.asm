@@ -20,6 +20,7 @@
 ; $3000 - $3200     : game logic tables and data, and strings
 ; $4400 - $47FF     : screen for first person mode (bank 1)
 ; $5000 - $57FF     : character map for first person (bank 1) written directly by loader
+; $6000 - $63FF     : sprite data for bank 1 (first person), first block at sprite pointer position $80 (128)
 ; $7000 - $72FF     : first person drawing data tables
 ; $8400 - $87FF     : screen for map mode (bank 2) written to directly by loader
 ; $C000 - $C3FF     : colour map copy and image data
@@ -54,6 +55,11 @@ VIC_RASTER_IRQ_CMP      = $D012
 
 VIC_CIA2_BANK_SELECT    = $DD00     ; bits 0, 1 are system memroy bank select (default 11b)
 VIC_CIA2_DATA_DIR_A     = $DD02     ; set bits 0, 1 to enable bank switching
+
+VIC_SPRITE_ENABLE       = $D015
+VIC_SPRITE_COL_0        = $D027
+VIC_SPRITE_POS_REGS     = $D000
+VIC_SPRITE_MSB_REG      = $D010
 
 ;==========================================================
 ; PRE-PROCESSED CONSTANTS
@@ -91,6 +97,8 @@ CN_BK1_CHMAP_START_LOW  = $00
 CN_BK1_CHMAP_START_HIGH = $50
 CN_BK1_CHMAP_END_LOW    = $FF
 CN_BK1_CHMAP_END_HIGH   = $5F
+
+CN_BK1_SPRITE_POINTER_0 = $47F8
 
 ; video bank 2
 CN_BK2_SCR_START_LOW    = $00
@@ -141,6 +149,13 @@ CN_COL_VAL_L_GREY       = $0F
 
 CN_XY_MAP_STR_LINE_1_X  = $0E
 CN_XY_MAP_STR_LINE_1_Y  = $0B
+
+;==========================================================
+; CONST GAME DATA
+;==========================================================
+
+SP_POS_PAX_FAR_X        = $AC
+SP_POS_PAX_FAR_Y        = $84
 
 
 ;==========================================================
@@ -325,6 +340,7 @@ first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
   jsr draw_corridor                     ; draw detail of corridor at current position
   ;jsr draw_corridor_test
+  jsr draw_pax_far                      ; test draw Pax
 first_pers_loop_move
   jsr wait_for_key                      ; wait for a key from user
   cmp #CN_ASCII_M                       ; check if char is 'M', to switch modes
@@ -1028,6 +1044,61 @@ draw_from_tab_sec_end
 draw_from_tab_finish
   rts
 
+; === draw_pax_far
+draw_pax_far
+  lda #<data_draw_far_pax_bg
+  sta Z_ADDR_1_LOW
+  lda #>data_draw_far_pax_bg
+  sta Z_ADDR_1_HIGH
+  jsr draw_from_tables
+  jsr draw_sprite_pax
+
+; === draw_sprite_pax
+;   draw Pax character sprite on screen
+; params:
+;   A - $00 then draw far away, non $00 then draw close
+; uses:
+;   A, X
+;   Z_TEMP_1
+; side effects:
+;   wait_for_end_raster:    A
+; returns:
+;   none
+draw_sprite_pax
+  sta Z_TEMP_1
+  jsr wait_for_end_raster         ; wait until raster scan lines reach end of screen, to avoid visual tear
+  lda #$00                        ; A = 0
+  sta VIC_SPRITE_ENABLE           ; turn all sprites off
+  ldx #$80                        ; load first sprite pointer to first sprite (head) in X (used for inx convienence)
+  stx CN_BK1_SPRITE_POINTER_0     ; store in sprite pointer 0
+  inx                             ; X++, $81, next sprite of Pax (body)
+  stx CN_BK1_SPRITE_POINTER_0 + 1 ; store in sprite pointer 1
+  inx                             ; X++, $82, next sprite of Pax (legs)
+  stx CN_BK1_SPRITE_POINTER_0 + 2 ; store in sprite pointer 2
+  lda #$06                        ; get (dark) blue colour value
+  sta VIC_SPRITE_COL_0            ; set sprite 0 col white
+  sta VIC_SPRITE_COL_0 + 1        ; set sprite 1 col white
+  sta VIC_SPRITE_COL_0 + 2        ; set sprite 2 col white
+  lda #SP_POS_PAX_FAR_X            ; load x position of Pax vertical sprites
+  sta VIC_SPRITE_POS_REGS         ; store X in x pos for sprite 0
+  sta VIC_SPRITE_POS_REGS + 2     ; same for sprite 1 (pos registers in order x0, y0, x1, y1, x2, ...)
+  sta VIC_SPRITE_POS_REGS + 4     ; same for sprite 2
+  lda #SP_POS_PAX_FAR_Y            ; load y position of first Pax sprite
+  sta VIC_SPRITE_POS_REGS + 1     ; store Y in y pos for sprite 0
+  clc                             ; clear carry flag before addition
+  adc #$15                        ; A += $15 (21), calculate y pos of next sprite
+  sta VIC_SPRITE_POS_REGS + 3     ; store Y in y pos for sprite 1
+  clc                             ; clear carry flag before addition
+  adc #$15                        ; A += $15 (21), calculate y pos of next sprite
+  sta VIC_SPRITE_POS_REGS + 5     ; store Y in y pos for sprite 2
+  lda #$00                        ; A = 0, for MSB clearing
+  sta VIC_SPRITE_MSB_REG          ; clear sprite positioning MSB
+  lda #$07                        ; A = 00000111 b = $07
+  sta VIC_SPRITE_ENABLE           ; finally, turn on sprites 0, 1, 2
+  rts
+
+
+
 
 ; === special_char_test
 ;   basic test, print out first $13 (19) characters
@@ -1286,10 +1357,27 @@ fx_line_bk_edc_finish
 
 
 ;==========================================================
-; ROUTINES - LOW LEVEL
+; ROUTINES - GENERAL
 ;==========================================================
 
 ; these routines are general and form a bespoke standard library
+
+; === wait_for_end_raster
+;   waits until the raster scan lines reach the last line. useful for setting sprites so as not to show visual "tear"
+; params:
+;   none
+; uses:
+;   A
+; side effects:
+;   A will have value $FF after routine
+; returns:
+;   none
+wait_for_end_raster
+  lda #$FF
+wait_for_end_raster_loop
+  cmp VIC_RASTER_IRQ_CMP        ; check if on last line of raster, thus a frames worth of time has passed
+  bne wait_for_end_raster_loop  ; if not, loop until is on last line (loop through raster lines)
+  rts
 
 ; === wait_sec_blocking
 ;   wait for the number of seconds + frames given, blocks foreground process.
@@ -1474,6 +1562,49 @@ plot_set_bank_3                ; set for bank 3
   lda #CN_BK3_SCR_START_HIGH
   sta Z_SCR_START_HIGH
 plot_set_bank_finish
+  rts
+
+
+; === sprite_pos_from_char_xy
+;   get a sprite position from character (x,y) pair
+; params:
+;   X, Y - x, y value of character position
+; uses:
+;   A, X, Y
+;   stack (no effect beyond this routine)
+; side effects:
+; returns:
+;   A   - high component of x position (most significant 1 bit, i.e. 9th bit)
+;   X   - main x position component (least significant 8 bits)
+;   Y   - y position component
+sprite_pos_from_char_xy
+  txa                           ; X -> A, use x position input in A for manipulation
+  asl                           ; A<<  multiply by 8 in three steps using left shift,
+  asl                           ; A<<   but do first two first before check to see if will go out of 8 bit bounds
+  tax                           ; save updated A -> X
+  and #$80                      ; mask A with 10000000
+  cmp #$80                      ; check if bit 7 set
+  beq sprite_pos_fm_ch_xy_x_set ; set MSB if next shift will require more than 8 bits, if not, clear MSB
+  lda #$00                      ; clear MSB record (next left shift will not go out of 8 bit bounds)
+  pha                           ; store in stack for later
+  jmp sprite_pos_fm_ch_xy_cont  ; continue to finish mutplication by performing 3rd left shift
+sprite_pos_fm_ch_xy_x_set
+  lda #$01                      ; set MSB register for sprite 0 only
+  pha                           ; store MSB (bit 9) set value in stack for later
+sprite_pos_fm_ch_xy_cont
+  txa                           ; X -> A, can only bit shift in A
+  asl                           ; A<<
+  clc                           ; clear carry flag before addition
+  adc #$08                      ; A += 8  apply adjusting offset to centre x value with respect to char screen location grid
+  tax                           ; A -> X, store for return value for x pos
+  tya                           ; Y -> A, to also multiply Y by 8, no need for extra checks though as max value fits in a byte
+  asl                           ; A<< first
+  asl                           ; A<< second
+  asl                           ; A<< third
+  clc                           ; clear carry flag before addition
+  adc #$10                      ; A += 16 ($10) apply adjusting offset to centre y value with respect to char screen location grid
+  tay                           ; A -> Y, store return value for y pos
+  pla                           ; pull MSB value from stack
   rts
 
 
@@ -3953,6 +4084,23 @@ data_R_NEFW
 ; END, null terminated
 !byte $00
 
+; -- further draw instructions
+
+; background for far away Pax drawing, black out behind to match original effect
+data_draw_far_pax_bg
+!byte $01,$00,$13
+!byte $13,$0A
+!byte $01
+!byte $27,$01
+!byte $27,$01
+!byte $26,$01,$01,$01
+!byte $25,$01,$01,$01
+!byte $26,$01
+!byte $26,$01,$01,$01
+; END, null terminated
+!byte $00
+
+
 ; this label is just here to easily see what the last address of routines is, for memory calculations
 debug_label_end_of_draw_data    ; = $7db6 in this version.
                                 ;   that's 3510 bytes, recording 10 different screen halfs mirrored on both sizes,
@@ -3972,7 +4120,41 @@ data_col_map_backup
 ;* = $C3E8
 
 ;==========================================================
-; IMAGE DATA
+; SPRITE DATA
 ;==========================================================
 
-; none yet
+; each sprite takes 64 bytes
+
+; for video bank 1 (first person mode)
+
+* = $6000
+
+sprite_pax_standing_pt1
+!byte $00,$38,$00,$00,$fe,$00,$03,$ff
+!byte $80,$00,$c6,$00,$02,$ba,$80,$03
+!byte $7d,$80,$03,$7d,$80,$07,$01,$c0
+!byte $05,$6d,$40,$05,$39,$40,$05,$83
+!byte $40,$05,$bb,$40,$0e,$44,$e0,$18
+!byte $28,$30,$1a,$28,$b0,$17,$01,$d0
+!byte $17,$83,$d0,$17,$d7,$d0,$0f,$cf
+!byte $e0,$0b,$83,$b0,$18,$28,$30,$01
+
+sprite_pax_standing_pt2
+!byte $1c,$ee,$30,$39,$e7,$98,$39,$c9
+!byte $98,$31,$ae,$dc,$73,$6f,$8c,$71
+!byte $f7,$8c,$f1,$f7,$8e,$f1,$f7,$8e
+!byte $e1,$e7,$86,$61,$e7,$8f,$f1,$c6
+!byte $1f,$d2,$00,$d7,$e3,$01,$de,$07
+!byte $83,$e0,$07,$c3,$e0,$07,$e7,$c0
+!byte $07,$c3,$c0,$07,$c3,$e0,$07,$81
+!byte $e0,$0f,$81,$e0,$0f,$81,$e0,$01
+
+sprite_pax_standing_pt3
+!byte $0f,$81,$e0,$0f,$81,$e0,$0f,$81
+!byte $e0,$0f,$81,$f0,$0f,$00,$f0,$0f
+!byte $00,$f0,$0f,$00,$f0,$1f,$00,$f0
+!byte $1f,$00,$f8,$1e,$00,$78,$1e,$00
+!byte $78,$1e,$00,$78,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$00,$00,$00,$01
