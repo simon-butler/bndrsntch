@@ -42,16 +42,28 @@
 ; SYSTEM CONFIG
 ;==========================================================
 
-SYS_PAL                 = $32   ; 50 frames a second
-SYS_NTSC                = $3C   ; 60 frames a second
+CN_CONFIG_PAL                 = $32   ; 50 frames a second
+CN_CONFIG_NTSC                = $3C   ; 60 frames a second
 
-SYS_FRAMES              = SYS_PAL   ; IMPORTANT! SET THIS TO THE RIGHT REGION BEFORE BUILDING!
+CONFIG_FRAMES              = CN_CONFIG_PAL   ; IMPORTANT! SET THIS TO THE RIGHT REGION BEFORE BUILDING!
+
+
+;==========================================================
+; SYSTEM ADDRESSES
+;==========================================================
+
+SYS_TIMER_PTR_LOW             = $0314
+SYS_TIMER_PTR_HIGH            = $0315
+
 
 ;==========================================================
 ; SYSTEM AND KERNAL ROUTINES 
 ;==========================================================
 
 FN_GETIN                = $FFE4     ; get character from buffer (keyboard buffer unless changed)
+
+KERNAL_ST_INT           = $EA31     ; standard interupt routine, to jump to after getting called from timer
+
 
 ;==========================================================
 ; VIC MEM LOCATIONS
@@ -62,6 +74,12 @@ VIC_BORDER_COL          = $D020
 
 VIC_CTRL_REG_1          = $D011
 VIC_RASTER_IRQ_CMP      = $D012
+
+
+VIC_INT_FLAG_REG        = $D019     ; VIC Interupt Flag Register (bit = 1, IRQ occurred)
+VIC_IRQ_MASK_REG        = $D01A     ; IRQ mask reigster (1 = interrupt enabled)
+
+VIC_CIA1_INT_CTRL_REG   = $DC0D     ; VIC Interrupt Control Register (read IRQs / write mask)
 
 VIC_CIA2_BANK_SELECT    = $DD00     ; bits 0, 1 are system memroy bank select (default 11b)
 VIC_CIA2_DATA_DIR_A     = $DD02     ; set bits 0, 1 to enable bank switching
@@ -207,10 +225,8 @@ Z_BYTE_MATCH_HIGH       = $21
 Z_BYTE_MATCH_BYTE       = $22
 Z_BYTE_MATCH_LIST_SIZE  = $23
 
-Z_CHOICE_C_1            = $24
-Z_CHOICE_C_2            = $25
-Z_CHOICE_C_3            = $26
-Z_CHOICE_TEMP_1         = $27
+Z_CHOICE_SEC            = $24
+Z_CHOICE_COUNT          = $25
 
 ; user data
 ; - core
@@ -1254,6 +1270,7 @@ draw_face_pax
   jsr copy_mem                      ; copy col mem to storage mem
   rts
 
+
 ; === cutscene_choice_text_pax
 cutscene_choice_text_pax
   ; Pax line 1
@@ -1286,6 +1303,7 @@ cutscene_choice_text_pax
   jsr wait_sec_blocking             ; do waiting
   rts
 
+
 ; === choice_text_show_pax
 ;   show choice text, and timer count down, for Pax encounter, allowing for choice selection while it counts down
 ; params:
@@ -1298,7 +1316,18 @@ cutscene_choice_text_pax
 ; returns:
 ;   A - choice number, $01 for first choice (default if no input) or $02 for second choice
 choice_text_show_pax
-  jsr choice_clear_text_line          ; clear line that text is one (sets colours to black, keeps chars)
+  lda #CN_COL_VAL_WHITE               ; load colour white in A
+  ldy #$18                            ; load $18 (24), last y line, Y
+  jsr choice_col_text_line            ; fill the bottom line to indicate choice coming now
+  ldx #$02                            ; use 2 second delay
+  ldy #$00                            ;   with no additional frames
+  jsr wait_sec_blocking               ; do wait
+  lda #CN_COL_VAL_BLACK               ; load colour black in A
+  ldy #$17                            ; load $17 (23), second last y line, Y
+  jsr choice_col_text_line            ; clear second last y line of text to colour black
+  lda #CN_COL_VAL_BLACK               ; load colour black in A
+  ldy #$18                            ; load $18 (24), last y line, Y
+  jsr choice_col_text_line            ; clear last y line of text to colour black
   jsr choice_timer_prepare            ; prepare timer
   lda #$17                            ; set plot y to $17 (23)
   sta Z_SCR_Y                         ; store in plot y
@@ -1349,9 +1378,9 @@ choice_txt_sh_pax_cont
   jsr FN_GETIN                        ; use kernal GETIN function, get key input if any
   cmp #$00                            ; check if no (null) input
   bne choice_txt_sh_pax_key           ; if has input, check it
-  ;jsr choice_timer_handler            ; otherwise update timer handler
-  ;cmp #$00                            ; check if handler returned zero
-  ;beq choice_txt_sh_pax_fin           ; if is then timer finished, choice is made, time to exit routine
+  jsr choice_timer_draw            ; otherwise update timer handler
+  cmp #$00                            ; check if handler returned zero
+  beq choice_txt_sh_pax_fin           ; if is then timer finished, choice is made, time to exit routine
   jmp choice_txt_sh_pax_cont          ; otherwise continue waiting for key
 choice_txt_sh_pax_key
   cmp #CN_ASCII_A                     ; check if is A (left key)
@@ -1372,12 +1401,21 @@ choice_txt_sh_pax_right
   lda #$02                            ; otherwise load A with choice 1 signified $01
   jmp choice_txt_sh_pax_redraw        ; then redraw with new choice selection
 choice_txt_sh_pax_fin
+  ; TODO : disable timer! is still running forever
   pla                                 ; pull choice value from stack to A
   rts                                 ; return with choice value in A
 
 
 ; === choice_timer_prepare
 ;   prepares choice timer variables used in z page for timer routine
+; params:
+;   none
+; uses:
+;   A
+; side effects:
+;   managed, but accesses lots of VIC registers to set up interrupt
+; returns:
+;   none
 choice_timer_prepare
   lda #$C0                            ; load low byte of start of last line of screen memory
   sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
@@ -1385,21 +1423,58 @@ choice_timer_prepare
   clc                                 ; clear carry flag before addition
   adc #$03                            ; add $03 to get to last page of memory
   sta Z_ADDR_4_HIGH                   ; store in addr 4 high byte
-  lda #$0A                            ; load $0A (10), timer largest counter (represents 10-ish seconds of full delay)
-  sta Z_CHOICE_C_1                    ; store in choice counter 1
-  lda #$05                            ; load starting max value of middle counter
-  sta Z_CHOICE_C_2                    ; store in choice counter 2
-  lda #$FF                            ; load starting max value of smallest counter
-  sta Z_CHOICE_C_3                    ; store in choice counter 3
+  lda #$13                            ; load $13 (19), number of half seconds
+  sta Z_CHOICE_SEC                    ; store in choice second count
+  lda #CONFIG_FRAMES                  ; load number of frames per second for this config
+  lsr                                 ; right shift (divide by 2)
+  sta Z_CHOICE_COUNT                  ; store in choice counter
+  lda #$7F                            ; (01111111)b value to "switch off" interrupts signals from CIA #1
+  sta VIC_CIA1_INT_CTRL_REG           ; write switching off value
+  and VIC_CTRL_REG_1                  ; clear MSB in VIC raster register
+  sta VIC_CTRL_REG_1                  ; store value
+  lda #$D2                            ; set raster line to trigger interrupt at
+  sta VIC_RASTER_IRQ_CMP              ; store in raster IRQ compare register
+  lda #<choice_timer_handler          ; get low byte of choice timer handler code
+  sta SYS_TIMER_PTR_LOW               ; store in low byte of timer pointer
+  lda #>choice_timer_handler          ; get high byte of choice timer handler code
+  sta SYS_TIMER_PTR_HIGH              ; store in high byte of timer pointer
+  lda #$01                            ; set value to enable interript signals
+  sta VIC_IRQ_MASK_REG                ; store value
   rts                
   
 
 ; === choice_timer_handler
-;   handles display and count down of timer bar from bottom, should be called as much as possible
-; notes:
-;   this method is very inexact, but should give a rough approximation of the time limit
+;   handles change in choice timer variables, very light code
 ; assumptions:
-;   choice_timer_prepare MUST BE EXECUTED before running this routine choice_timer_handler
+;   choice_timer_prepare MUST BE EXECUTED before running this routine
+; params:
+;   none (called by system)
+; uses:
+;   A
+; side effects:
+;   Z_CHOICE_SEC and Z_CHOICE_COUNT updated
+;   VIC interrupt is acknowledged using the interrupt flag register
+; returns:
+;   none
+choice_timer_handler
+  lda Z_CHOICE_SEC                    ; first check seconds (auto zero check)
+  beq choice_tmr_hndlr_finish         ; if zero then already finished, skip to end
+  dec Z_CHOICE_COUNT                  ; decrease value of counter
+  lda Z_CHOICE_COUNT                  ; load counter value (auto zero check)
+  bne choice_tmr_hndlr_finish         ; if not expired to $00, finish
+  lda #CONFIG_FRAMES                  ; otherwise load max value (num frames per second)
+  lsr                                 ; right shift (divide by 2)
+  sta Z_CHOICE_COUNT                  ; store in count
+  dec Z_CHOICE_SEC                    ; decrease number of seconds
+choice_tmr_hndlr_finish
+  asl VIC_INT_FLAG_REG                ; "acknowledge" the interupt by clearing the VIC interrupt flag
+  jmp KERNAL_ST_INT                   ; jump to kernal's standard interrupt service to handle keyboard, etc.
+
+
+; === choice_timer_handler
+;   handles display of timer bar from bottom, should be called frequently
+; assumptions:
+;   choice_timer_prepare MUST BE EXECUTED before running this routine
 ;   the last row of characters MUST BE blocks to that they can be coloured by this routine setting col map mem
 ; params:
 ;   none
@@ -1412,115 +1487,91 @@ choice_timer_prepare
 ;   writes to screen, last line of current colour map
 ; returns:
 ;   A - value of (largest) counter, between $0A at start, down to $00 when finished
-choice_timer_handler
-  lda Z_CHOICE_C_1                    ; first check largest counter
-  beq choice_tmr_hndlr_finish         ; if zero then already finished, skip to end
-  dec Z_CHOICE_C_3                    ; decrease value of smallest counter
-  lda Z_CHOICE_C_3                    ; load smallest counter value (auto zero check)
-  bne choice_tmr_hndlr_draw           ; if not expired to $00, continue to draw
-  lda #$FF                            ; otherwise load max value of smallest counter
-  sta Z_CHOICE_C_3                    ; store in temp 3
-  dec Z_CHOICE_C_2                    ; decrease value of middle counter
-  lda Z_CHOICE_C_2                    ; load middle counter value (auto zero check)
-  bne choice_tmr_hndlr_draw           ; if not expired to $00, continue to draw
-  lda #$05                            ; otherwise load max value of middle counter
-  sta Z_CHOICE_C_2                    ; store in temp 3
-  dec Z_CHOICE_C_1                    ; decrease value of largest counter, and continue to draw
-choice_tmr_hndlr_draw
-  lda #$C0                            ; load low byte of start of last line of screen memory
+choice_timer_draw
+  lda Z_CHOICE_SEC                    ; load counter value in case it changes by interrupt while running
+  sta Z_TEMP_1                        ; store in temp 1
+  lda #$14                            ; load max value for half seconds in A
+  clc                                 ; clear carry flag before subtraction
+  sbc Z_TEMP_1                        ; subtract number of half seconds from max value
+  sta Z_TEMP_2                        ; store in temp 2 (inverted number of half seconds)
+  lda #$C1                            ; load low byte of start of last line of screen memory (will have changed)
   sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
   ldy #$00                            ; zero Y for indirect addressing, and counter
+  lda #CN_COL_VAL_BLACK               ; set A to black colour
+choice_tmr_dw_left_black_loop
+  cpy Z_TEMP_2                        ; compare current Y against inverted half seconds value
+  beq choice_tmr_dw_left_white        ; if finished black, move to white
+  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
+  iny                                 ; Y++
+  jmp choice_tmr_dw_left_black_loop
+choice_tmr_dw_left_white
+  lda Z_TEMP_2                        ; load inverted half seconds value
+  clc                                 ; clear carry flag before addition
+  adc Z_ADDR_4_LOW                    ; add to addr 4 low byte
+  sta Z_ADDR_4_LOW                    ; store result
+  ldy #$00                            ; zero Y for indirect addressing, and counter
   lda #CN_COL_VAL_WHITE               ; set A to white colour
-choice_tmr_hndlr_left_loop
-  cpy Z_CHOICE_C_1                 ; compare current Y against modified largest counter value
-  beq choice_tmr_hndlr_right_side
+choice_tmr_dw_left_white_loop
+  cpy Z_TEMP_1                        ; compare current Y against inverted half seconds value
+  beq choice_tmr_dw_right_white       ; if finished black, move to white
   sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
   iny                                 ; Y++
-  jmp choice_tmr_hndlr_left_loop
-choice_tmr_hndlr_right_side
-  lda Z_CHOICE_C_1
-  clc
-  adc Z_ADDR_4_LOW
-  sta Z_ADDR_4_LOW
-  lda #$0A
-  clc
-  sbc Z_CHOICE_C_1
-  sta Z_CHOICE_TEMP_1
-  ldy #$00
-  lda #CN_COL_VAL_BLACK               ; otherwise select black, in A
-choice_tmr_hndlr_right_loop
-  cpy Z_CHOICE_TEMP_1                 ; compare current Y against modified largest counter value
-  beq choice_tmr_hndlr_finish
+  jmp choice_tmr_dw_left_white_loop
+choice_tmr_dw_right_white
+  lda Z_TEMP_1                        ; load normal half seconds value
+  clc                                 ; clear carry flag before addition
+  adc Z_ADDR_4_LOW                    ; add to addr 4 low byte
+  sta Z_ADDR_4_LOW                    ; store result
+  ldy #$00                            ; zero Y for indirect addressing, and counter
+  lda #CN_COL_VAL_WHITE               ; set A to white colour
+choice_tmr_dw_right_white_loop
+  cpy Z_TEMP_1                        ; compare current Y against inverted half seconds value
+  beq choice_tmr_dw_right_black       ; if finished black, move to black
   sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
   iny                                 ; Y++
-  jmp choice_tmr_hndlr_right_loop
-choice_tmr_hndlr_finish
-  lda Z_CHOICE_C_1                    ; finally load value of largest counter to return with from routine
+  jmp choice_tmr_dw_right_white_loop
+choice_tmr_dw_right_black
+  lda Z_TEMP_1                        ; load normal half seconds value
+  clc                                 ; clear carry flag before addition
+  adc Z_ADDR_4_LOW                    ; add to addr 4 low byte
+  sta Z_ADDR_4_LOW                    ; store result
+  ldy #$00                            ; zero Y for indirect addressing, and counter
+  lda #CN_COL_VAL_BLACK               ; set A to black colour
+choice_tmr_dw_right_black_loop
+  cpy Z_TEMP_2                        ; compare current Y against inverted half seconds value
+  beq choice_timer_draw_finish        ; if finished black, move to white
+  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
+  iny                                 ; Y++
+  jmp choice_tmr_dw_right_black_loop
+choice_timer_draw_finish
+  lda Z_TEMP_1                        ; finally load value of largest counter to return with from routine
   rts
-  ;---------
-  ; left side
-;  lda #$C0                            ; load low byte of start of last line of screen memory
-;  sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
-;  lda #$0A                            ; load max largest counter value
-;  clc
-;  sbc Z_CHOICE_C_1                    ; subtract current largest counter value from it (invert)
-;  lsr                                 ; A<< left shift, i.e. multiply by 2
-;  sta Z_CHOICE_TEMP_1                 ; store in temp 4
-;  ldy #$00                            ; zero Y for indirect addressing, and counter
-;choice_tmr_hndlr_left_loop
-;  cpy Z_CHOICE_TEMP_1                 ; compare current Y against modified largest counter value
-;  bpl choice_tmr_hndlr_left_fill      ; if >= then draw filled square at current loc
-;  lda #CN_COL_VAL_BLACK               ; otherwise select black, in A
-;  jmp choice_tmr_hndlr_left_cont      ; then continue to draw
-;choice_tmr_hndlr_left_fill
-;  lda #CN_COL_VAL_WHITE               ; set A to white
-;choice_tmr_hndlr_left_cont
-;  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
-;  iny                                 ; Y++
-;  sta (Z_ADDR_4_LOW), Y               ; save another colour
-;  iny                                 ; Y++
-;  cpy #$14                            ; check if left side at end (20) and done
-;  bne choice_tmr_hndlr_left_loop      ; if not continue left side loop
-;  ; right side
-;  lda #$D4                            ; load low byte for right side of last line ($C0 + $14 = $D4)
-;  sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
-;  lda Z_CHOICE_C_1                    ; load current largest counter value
-;  lsr                                 ; A<< left shift, i.e. multiply by 2
-;  sta Z_CHOICE_TEMP_1                 ; store in temp 4
-;  ldy #$00                            ; zero Y for indirect addressing, and counter
-;choice_tmr_hndlr_right_loop
-;  cpy Z_CHOICE_TEMP_1                 ; compare current Y against modified largest counter value
-;  bmi choice_tmr_hndlr_right_fill     ; if < then draw filled square at current loc
-;  lda #CN_COL_VAL_BLACK               ; otherwise select black, in A
-;  jmp choice_tmr_hndlr_right_cont     ; then continue to draw
-;choice_tmr_hndlr_right_fill
-;  lda #CN_COL_VAL_WHITE               ; set A to white
-;choice_tmr_hndlr_right_cont
-;  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
-;  iny                                 ; Y++
-;  sta (Z_ADDR_4_LOW), Y               ; save another colour
-;  iny                                 ; Y++
-;  cpy #$14                            ; check if right side at end (20) and done
-;  bne choice_tmr_hndlr_right_loop     ; if not continue right side loop
-;choice_tmr_hndlr_finish
-;  lda Z_CHOICE_C_1                    ; finally load value of largest counter to return with from routine
-;  rts
 
 
 ; === choice_clear_text_line
-choice_clear_text_line
+;   colour a single line of text with a given colour
+; params:
+;   A - colour
+;   Y - y plot line
+; uses:
+;   A, X, Y
+; side effects:
+;   plot_set_xy:            A, X, Y, plot variables
+; return:
+;   none
+choice_col_text_line
+  pha                                 ; push colour to stack
   lda #$00                            ; load $00 for plot x
   sta Z_SCR_X                         ; store in plot x
-  lda #$17                            ; load $17 (23) for plot y
-  sta Z_SCR_Y                         ; store in plot y
+  sty Z_SCR_Y                         ; store in plot y
   jsr plot_set_xy                     ; update plot variables
   ldy #$00                            ; set Y for indirect addressing, and counter
-  lda #CN_COL_VAL_BLACK               ; set colour black
-choice_clr_txt_ln_loop
+  pla                                 ; pull colour from stack
+choice_col_text_line_loop
   sta (Z_COL_LOW_BYTE), Y             ; store in next location
   iny                                 ; Y++
   cpy #$28                            ; check if reached end of line
-  bne choice_clr_txt_ln_loop          ; if not, loop
+  bne choice_col_text_line_loop       ; if not, loop
   rts                                 ; otherwise done
 
 
@@ -1794,7 +1845,7 @@ wait_sec_bl_loop
   bne wait_sec_bl_loop          ; if not reached zero yet, keep waiting on frames
   dex                           ; reduce number of seconds
   beq wait_sec_bl_finish        ; if zero, then end
-  ldy SYS_FRAMES                ; otherwise put frame count to max, begin again
+  ldy CONFIG_FRAMES                ; otherwise put frame count to max, begin again
   jmp wait_sec_bl_loop
 wait_sec_bl_finish
   rts
@@ -1845,7 +1896,7 @@ wait_sec_bl_bf_cont
   bne wait_sec_bl_bf_loop       ; if not reached zero yet, keep waiting on frames
   dex                           ; reduce number of seconds
   beq wait_sec_bl_bf_finish     ; if zero, then end
-  ldy SYS_FRAMES                ; otherwise put frame count to max, begin again
+  ldy CONFIG_FRAMES                ; otherwise put frame count to max, begin again
   jmp wait_sec_bl_bf_loop
 wait_sec_bl_bf_finish
   lda Z_TEMP_1                  ; get starting border colour from temp 1
