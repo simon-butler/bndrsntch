@@ -24,7 +24,8 @@
 ; $6000 - $63FF     : sprite data for bank 1 (first person), first block at sprite pointer position $80 (128)
 ; $7000 - $72FF     : first person drawing data tables
 ; $8400 - $87FF     : screen for map mode (bank 2) written to directly by loader
-; $C000 - $C3FF     : colour map copy and image data
+; $C000 - $CBFF     : screen back up and buffers
+; $CC00 - $CFFF     : image data
 ; 
 ;==========================================================
 
@@ -164,6 +165,8 @@ SP_POS_PAX_NEAR_Y       = $74
 GM_PAX_LOC_X            = $0A
 GM_PAX_LOC_Y            = $14
 
+ACTOR_KEY_PAX           = $01
+
 ;==========================================================
 ; ZERO PAGE MAP
 ;==========================================================
@@ -219,6 +222,7 @@ Z_PLYR_LOOK_AHEAD_Y     = $4A           ; y pos of ^ same
 
 ; game settings
 Z_GAME_MODE             = $50           ; 0 = title screen, 1 = map, 2 = first person, 3 = choice, 4 = info
+Z_CHOICE_ACTOR          = $51
 
 ; lookup tables
 Z_TABLE_START           = $80           ; not yet used, but possible idea
@@ -345,7 +349,9 @@ first_pers_draw_scr
   lda #CN_VID_BANK_1                    ; load code for video bank 1
   jsr plot_set_bank                     ; restore bank for plot read to 1
   jsr plot_pull_scr_col_buffers         ; pull data from screen and colour buffers to current plot ptrs (actual scr bank 1, col map)
-  jsr draw_fp_sprites                   ; draw first person sprites
+  jsr draw_fp_sprites                   ; draw first person sprites, returns actor key if occupy same loc as actor
+  cmp #ACTOR_KEY_PAX                    ; check if occupies same loc as Pax
+  beq first_pers_act_pax                ; if so, process Pax event
 first_pers_loop_move
   jsr wait_for_key                      ; wait for a key from user
   cmp #CN_ASCII_M                       ; check if char is 'M', to switch modes
@@ -364,14 +370,38 @@ first_pers_loop_move
   jsr update_stored_map_highlights      ; otherwise moved successfully, update map highlights for map mode coherence
 first_pers_loop_move_fail
   jmp first_pers_loop_update_player     ; otherwise update from new move position, new draw and pass to main loop
+first_pers_act_pax
+  jsr wait_for_key                      ; wait for a key from user TO LET THEM SOAK IN THE HORROR OF PAX
+  lda #ACTOR_KEY_PAX                    ; load A with actor key for Pax
+  sta Z_CHOICE_ACTOR                    ; store in choice actor variable
+  jmp first_pers_goto_choice            ; prepare to go to choice screen
 first_pers_goto_map
   jsr restore_map_highlights            ; restore map highlights (colours)
   lda #$01                              ; change mode variable to $01 for map mode
   sta Z_GAME_MODE
   jmp map_entry                         ; enter map mode
+first_pers_goto_choice
+  jsr disable_sprites                   ; turn off any active sprites
+  jsr restore_map_highlights            ; restore map highlights (colours)
+  lda #03                               ; change mode variable to $03 for choice mode
+  sta Z_GAME_MODE
+  ;jmp choice_entry                      ; enter choice mode (uses pass through now but can restore this line if required)
 ;---------------------------------------
 choice_entry
-  jmp *                                 ; TODO - choice mode not yet made
+  lda #CN_COL_VAL_BLACK                 ; set border col to black
+  sta VIC_BORDER_COL
+  sta VIC_BG_COL
+  lda #CN_VID_BANK_0                    ; load code for video bank 0
+  jsr set_video_bank                    ; set video bank to 0
+choice_load_actor
+  lda Z_CHOICE_ACTOR                    ; load choice actor key
+  cmp #ACTOR_KEY_PAX                    ; check if is Pax
+  beq choice_pax_start
+  jmp *                                 ; otherwise some error, in this demo only Pax choice currently exists
+choice_pax_start
+  jsr draw_face_pax                     ; draw Pax face on screen
+  jsr cutscene_choice_text_pax          ; then do choice text cutscene for Pax (includes 5 seconds of delays for dramatic effect)
+  jmp *                                 ; TODO - finish Pax choice
 ;---------------------------------------
 info_entry
   jmp *                                 ; TODO - info mode not yet made
@@ -1019,6 +1049,21 @@ draw_from_tab_finish
 
 ; === draw_fp_sprites
 ;   draw first person sprites. rough draft of system to use, has Pax only right now
+; notes:
+;   actor keys:
+;     $01 - Pax
+; params:
+;   none
+; uses:
+;   A
+; side effects:
+;   draw_pax_near:        A, X, Y
+;   draw_pax_far:         A, X, Y
+;   ^ draw_from_tables:   A, X, Y, Z_TEMP_1 / 2 / 3 / 4, Z_ADDR_1_LOW / HIGH, addr 2, 3
+;     ^ plot_set_xy:      A, X, Y, plot variables
+;   ^ draw_sprite_pax:    A, X, Y, Z_TEMP_1 / 2 / 3, bank 1 sprite tables altered
+; returns:
+;   A - actor key of actor if occupies same sapce, or $00 if none (see notes)
 draw_fp_sprites
   lda Z_PLYR_LOOK_AHEAD_X         ; first check if look ahead x matches Pax location x
   cmp #GM_PAX_LOC_X
@@ -1027,7 +1072,7 @@ draw_fp_sprites
   cmp #GM_PAX_LOC_Y
   bne draw_fp_sprites_chk2        ; if not jump to check 2
   jsr draw_pax_far                ; otherwise there's a match, draw pax far away (in look ahead position)
-  jmp draw_fp_sprites_finish      ; then finish
+  jmp draw_fp_sprites_fin_none    ; then finish
 draw_fp_sprites_chk2
   lda Z_PLYR_POS_X                ; first check if player pos x matches Pax location x
   cmp #GM_PAX_LOC_X
@@ -1036,12 +1081,17 @@ draw_fp_sprites_chk2
   cmp #GM_PAX_LOC_Y
   bne draw_fp_sprites_none        ; if not jump to turn off sprites
   jsr draw_pax_near               ; otherwise there's a match, draw pax near (on this location, next action should be Pax talks)
-  jmp draw_fp_sprites_finish      ; then finish
+  jmp draw_fp_sprites_fin_act1    ; then finish and also return actor key for Pax
 draw_fp_sprites_none
   jsr wait_for_end_raster         ; wait until raster scan lines reach end of screen, to avoid visual tear
   lda #$00                        ; A = 0
   sta VIC_SPRITE_ENABLE           ; turn all sprites off
-draw_fp_sprites_finish
+  jmp draw_fp_sprites_fin_none
+draw_fp_sprites_fin_act1
+  lda #ACTOR_KEY_PAX              ; set A to return value of actor key for Pax
+  rts
+draw_fp_sprites_fin_none
+  lda #$00                        ; null actor key for return value
   rts
 
 
@@ -1081,6 +1131,7 @@ draw_pax_near
 ;   A, X, Y
 ;   Z_TEMP_1 / 2 / 3
 ; side effects:
+;   bank 1 sprite variables altered
 ;   wait_for_end_raster:    A
 ; returns:
 ;   none
@@ -1138,8 +1189,6 @@ draw_sprite_pax_y3
   rts
 
 
-
-
 ; === special_char_test
 ;   basic test, print out first $13 (19) characters
 special_char_test
@@ -1171,6 +1220,64 @@ draw_corridor_test
   sta Z_ADDR_1_HIGH
   jsr draw_from_tables
   rts
+
+
+;==========================================================
+; ROUTINES - CHOICE
+;==========================================================
+
+; === draw_face_pax
+draw_face_pax
+  lda #CN_CHAR_BLOCK                ; get block character
+  jsr plot_fill_char_scr            ; fill whole screen with block
+  lda #CN_SCR_OFFSET_START          ; get low byte of screen data start
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  sta Z_ADDR_3_LOW                  ; store in addr 2 low byte
+  lda #CN_SCR_OFFSET_END_L          ; get low byte of screen mem type end
+  sta Z_ADDR_2_LOW                  ; store in addr 2 low byte
+  lda #CN_COL_MEM_START_HIGH              ; get high byte of screen start (to write to)
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  clc                               ; clear carry flag
+  adc #CN_SCR_OFFSET_END_H          ; add end offset of screen mem type size
+  sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
+  lda #>data_image_col_pax          ; get high byte of col map for pax image
+  sta Z_ADDR_3_HIGH                 ; store in addr 3 high byte
+  jsr copy_mem                      ; copy col mem to storage mem
+  rts
+
+; === cutscene_choice_text_pax
+cutscene_choice_text_pax
+  ; Pax line 1
+  ldx #$02                          ; wait for 2 seconds
+  ldy #$00                          ;   with no extra frames
+  jsr wait_sec_blocking             ; do waiting
+  lda #$00                          ; set y to top line
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_pg1_pax_line1      ; get low byte of pax line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_pg1_pax_line1      ; get high byte of pax line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  ; Pax line 2
+  ldx #$02                          ; wait for 2 seconds
+  ldy #$00                          ;   with no extra frames
+  jsr wait_sec_blocking             ; do waiting
+  lda #$01                          ; set y to next from top line
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_pg1_pax_line2      ; get low byte of pax line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_pg1_pax_line2      ; get high byte of pax line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw second line on screen
+  ; post draw
+  ldx #$01                          ; wait for 1 second
+  ldy #$00                          ;   with no extra frames
+  jsr wait_sec_blocking             ; do waiting
+  rts
+
+
 
 ;==========================================================
 ; ROUTINES - SPECIAL EFFECTS
@@ -1395,7 +1502,6 @@ fx_line_bk_edc_finish
   rts                           ; otherwise finished
 
 
-
 ;==========================================================
 ; ROUTINES - GENERAL
 ;==========================================================
@@ -1516,6 +1622,22 @@ init_helper_vars
   sta Z_COL_START_LOW
   lda #CN_COL_MEM_START_HIGH
   sta Z_COL_START_HIGH
+  rts
+
+
+; === disable_sprites
+;   disables all sprites
+; params:
+;   none
+; uses:
+;   A
+; side effects:
+;   sprite enable register is cleared
+; returns:
+;   none
+disable_sprites
+  lda #$00                        ; A = 0
+  sta VIC_SPRITE_ENABLE           ; turn all sprites off
   rts
 
 ; === enable_video_bank_selection
@@ -1760,10 +1882,12 @@ draw_chars_list_next
 
 ; === draw_chars_list_with_col
 ;   draw a chars list (e.g. front sized char list AKA string) on screen at current screen plot pos, copying contents from memory.
-;   also writes a colour over character positions in col map.
-;   DOES NOT change plot positions
+; notes:
+;   * also writes a colour over character positions in col map.
+;   * DOES NOT change plot positions
+; assumptions:
+;   plot_set_xy should already have been called to set up plot location
 ; params:
-;   !!! plot_set_xy should already have been called to set up plot location
 ;   Z_ADDR_1_HIGH / LOW - memory location of char list / string
 ;   X - colour value to write over chars in col map
 ; uses:
@@ -1789,6 +1913,81 @@ draw_chars_list_wc_next
   bne draw_chars_list_wc_next  ; if not equal, continue with next char
   rts                       ; otherwise, done, finish
 
+; === draw_chars_list_centered
+;   draws a char list (string) in centered position, at current plot y
+; assumptions:
+;   string is correct according to string format (preceeded with string length)
+;   assumes condition holds: (plot x - (string len / 2)) >= 0
+; params:
+;   X - colour to draw char list in
+;   Z_ADDR_1_LOW / HIGH is set to string base
+; uses:
+;   A, X
+;   stack
+; side effects:
+;   carry (borrw) flag may be set after this routine, though only if condition violated
+;   plot_center_x_on_str:   A, X, Y, Z_TEMP_1, carry flag may be set
+;   plot_set_xy:            A, X, Y, plot variables
+; returns:
+;   A - x pos to draw centered string at
+draw_chars_list_centered
+  txa                               ; X -> A, move colour to A from X
+  pha                               ; push colour val to stack for later
+  lda #$16                          ; set x to center (20), in A
+  sta Z_SCR_X                       ; store in plot x (let plot_set_center_x_on_str update variables automatically)
+  jsr plot_set_center_x_on_str      ; calcualte and set plot x to x to allow for centered string draw
+  pla                               ; pull colour value from stack to A
+  tax                               ; A -> X, set up colour value in X as param for draw_chars_list_with_col
+  jsr draw_chars_list_with_col      ; draw string
+  rts
+
+; === plot_set_center_x_on_str
+;   sets plot x position to centered text position based on current x pos as center
+; assumptions:
+;   string is correct according to string format (preceeded with string length)
+;   assumes condition holds: (plot x - (string len / 2)) >= 0
+; params:
+;   Z_ADDR_1_LOW / HIGH is set to string base
+; uses:
+;   A
+; side effects:
+;   carry (borrw) flag may be set after this routine, though only if condition violated
+;   plot_center_x_on_str:   A, X, Y, Z_TEMP_1, carry flag may be set
+;   plot_set_xy:            A, X, Y, plot variables
+; returns:
+;   A - x pos to draw centered string at
+plot_set_center_x_on_str
+  lda Z_SCR_X                 ; load A with plot x
+  jsr plot_center_x_on_str    ; calculate x pos for string centered on plot x pos
+  sta Z_SCR_X                 ; store result in plot X
+  jsr plot_set_xy             ; update plot variables
+  rts
+
+; === calc_centered_str_x
+;   calculates centered x position to show string at based on given x pos
+; assumptions:
+;   string is correct according to string format (preceeded with string length)
+;   assumes condition holds: (x - (string len / 2)) >= 0
+; params:
+;   A - input x pos
+;   Z_ADDR_1_LOW / HIGH is set to string base
+; uses:
+;   A, X, Y
+;   Z_TEMP_1
+; side effects:
+;   carry (borrw) flag may be set after this routine, though only if condition violated
+; returns:
+;   A - x pos to draw centered string at
+plot_center_x_on_str
+  tax                     ; A -> X, store given x pos temporarily in X
+  ldy #$00                ; zero Y for indirect addressing
+  lda (Z_ADDR_1_LOW), Y   ; get length of string in A
+  lsr                     ; A>> right shift A, i.e. divide by 2
+  sta Z_TEMP_1            ; store result in temp 1
+  txa                     ; X -> A, restore gievn x pos to A from X
+  clc                     ; clear carry (borrow) flag before subtract
+  sbc Z_TEMP_1            ; subtract the value from temp 1 from plot x in A
+  rts                     ; returns
 
 ; === plot_set_buffer
 ;   sets plot start pointers to buffer, for char screen and col map
@@ -3626,16 +3825,29 @@ data_corridor_matrix
 data_str_page_1
 data_str_pg1_facing_north
 !byte $0C
-!scr "facing north"
+!scr  "facing north"
 data_str_pg1_facing_south
 !byte $0C
-!scr "facing south"
+!scr  "facing south"
 data_str_pg1_facing_east
 !byte $0C
-!scr "facing east "
+!scr  "facing east "
 data_str_pg1_facing_west
 !byte $0C
-!scr "facing west "
+!scr  "facing west "
+
+data_str_pg1_pax_line1
+!byte $0E
+!scr  "puny human !!!"
+data_str_pg1_pax_line2
+!byte $14
+!scr  "will you worship me?"
+data_str_pg1_pax_choice1
+!byte $08
+!scr  "deny pax"
+data_str_pg1_pax_choice2
+!byte $08
+!scr  "worship pax"
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
 debug_label_end_of_tables_strings   ; = $3097 in this version
@@ -5038,7 +5250,7 @@ sprite_pax_standing_pt3
 
 
 ;==========================================================
-; MAPS
+; SCREEN BUFFERS
 ;==========================================================
 
 * = $C000
@@ -5057,3 +5269,37 @@ data_buffer_scr_chars
 data_buffer_col_map
 ; "reserving" data, not really done but use for label
 ;* = $CBE8
+
+
+;==========================================================
+; IMAGE DATA
+;==========================================================
+
+* = $CC00
+
+data_image_col_pax
+!byte $00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$06,$06,$06,$00,$00,$06,$00,$00,$06,$00,$00,$00,$06,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$06,$00,$06,$00,$00,$06,$00,$06,$00,$00,$00,$06,$06,$00,$00,$06,$06,$06,$06,$06,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$00,$00,$06,$06,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$06,$06,$00,$00,$06,$06,$00,$00,$00,$00,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$00,$06,$06,$00,$00,$06,$06,$00,$00,$00,$06,$00,$00,$00,$00,$00,$00,$00,$00,$06,$06,$06,$00,$00,$00,$06,$06,$00,$00,$00,$00,$00,$00,$00,$00,$00
+!byte $00,$00,$00,$06,$06,$06,$06,$06,$06,$00,$06,$06,$00,$00,$06,$06,$06,$06,$06,$06,$00,$06,$06,$06,$06,$06,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00
+!byte $00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$06,$06,$00,$00,$06,$06,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$06,$06,$00,$00,$06,$06,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$00,$00,$00,$06,$06,$06,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$06,$06,$06,$00,$00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$00,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$06,$06,$06,$00,$00,$00,$00,$00,$00
+!byte $00,$00,$00,$00,$00,$00,$06,$06,$06,$00,$00,$00,$06,$06,$00,$00,$00,$06,$06,$06,$00,$06,$06,$00,$00,$00,$06,$06,$00,$00,$00,$06,$06,$00,$00,$00,$00,$06,$00,$00
+!byte $00,$00,$06,$00,$00,$00,$00,$06,$06,$00,$00,$00,$00,$00,$07,$07,$00,$00,$06,$06,$06,$06,$06,$00,$07,$07,$00,$00,$00,$00,$00,$00,$00,$06,$00,$06,$06,$06,$00,$00
+!byte $00,$00,$06,$00,$06,$00,$06,$00,$00,$00,$00,$00,$00,$00,$07,$06,$07,$00,$06,$06,$06,$06,$06,$07,$06,$07,$00,$00,$00,$00,$00,$00,$00,$06,$00,$06,$00,$06,$06,$00
+!byte $00,$00,$06,$00,$06,$00,$06,$00,$00,$00,$00,$00,$00,$06,$07,$07,$07,$00,$06,$06,$06,$06,$06,$07,$07,$00,$06,$06,$00,$00,$00,$06,$06,$06,$00,$06,$00,$06,$06,$00
+!byte $00,$06,$00,$00,$06,$00,$06,$00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$06,$00,$06,$00,$06,$00,$00,$06,$06
+!byte $06,$00,$06,$06,$06,$06,$06,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$06,$00,$00,$00,$00,$06,$06
+!byte $06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$00,$00,$00,$00,$00,$06,$00,$06,$06,$00,$06,$06
+!byte $06,$06,$06,$06,$00,$06,$06,$06,$06,$00,$00,$00,$00,$00,$00,$06,$06,$06,$06,$00,$00,$06,$06,$06,$06,$00,$00,$00,$00,$00,$00,$06,$06,$00,$06,$00,$06,$06,$00,$00
+!byte $00,$06,$06,$06,$00,$00,$06,$06,$06,$06,$06,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$06,$06,$06,$06,$00,$00,$00,$06,$06,$00,$00
+!byte $00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$06,$06,$06,$06,$00,$00,$00,$06,$06,$00,$00
+!byte $00,$06,$06,$06,$00,$00,$06,$06,$00,$06,$06,$00,$00,$06,$06,$00,$07,$00,$00,$07,$07,$00,$00,$07,$00,$06,$06,$00,$00,$06,$06,$00,$06,$06,$00,$00,$06,$06,$06,$00
+!byte $00,$06,$06,$06,$00,$06,$06,$06,$00,$06,$06,$00,$00,$00,$00,$00,$00,$00,$07,$00,$00,$07,$00,$00,$00,$00,$00,$00,$00,$06,$06,$00,$06,$06,$00,$00,$06,$06,$06,$00
+!byte $00,$06,$06,$00,$00,$06,$06,$06,$00,$06,$06,$00,$00,$00,$00,$00,$07,$00,$00,$07,$07,$00,$00,$07,$00,$00,$00,$00,$00,$06,$06,$00,$06,$06,$06,$00,$00,$06,$06,$00
+!byte $00,$06,$00,$00,$06,$06,$06,$06,$00,$06,$06,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$06,$06,$00,$06,$06,$06,$06,$00,$00,$06,$00
+!byte $00,$06,$00,$00,$06,$00,$00,$00,$06,$06,$00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$00,$06,$06,$00,$00,$00,$06,$00,$00,$06,$00
+!byte $00,$06,$00,$00,$06,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$06,$06,$06,$06,$06,$06,$06,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$06,$00,$00,$06,$00
