@@ -128,6 +128,8 @@ CN_CHAR_BLOCK           = $A0
 
 ; ASCII characters
 CN_ASCII_M              = $4D
+CN_ASCII_A              = $41
+CN_ASCII_D              = $44
 
 ; special characters, used in video bank 1 char set
 CN_SPEC_CHAR_BLANK      = $00
@@ -204,6 +206,11 @@ Z_BYTE_MATCH_LOW        = $20
 Z_BYTE_MATCH_HIGH       = $21
 Z_BYTE_MATCH_BYTE       = $22
 Z_BYTE_MATCH_LIST_SIZE  = $23
+
+Z_CHOICE_C_1            = $24
+Z_CHOICE_C_2            = $25
+Z_CHOICE_C_3            = $26
+Z_CHOICE_TEMP_1         = $27
 
 ; user data
 ; - core
@@ -401,7 +408,9 @@ choice_load_actor
 choice_pax_start
   jsr draw_face_pax                     ; draw Pax face on screen
   jsr cutscene_choice_text_pax          ; then do choice text cutscene for Pax (includes 5 seconds of delays for dramatic effect)
-  jmp *                                 ; TODO - finish Pax choice
+  jsr choice_text_show_pax              ; go to choice text display and handler, returns choice after timer expires
+  sta VIC_BORDER_COL                    ; debug: show result ($01 or $02) in border colour
+  jmp *                                 ; TODO - process Pax choice
 ;---------------------------------------
 info_entry
   jmp *                                 ; TODO - info mode not yet made
@@ -1277,6 +1286,242 @@ cutscene_choice_text_pax
   jsr wait_sec_blocking             ; do waiting
   rts
 
+; === choice_text_show_pax
+;   show choice text, and timer count down, for Pax encounter, allowing for choice selection while it counts down
+; params:
+;   none
+; uses:
+;   A, X
+;   Z_ADDR_1
+;   stack
+; side effects:
+; returns:
+;   A - choice number, $01 for first choice (default if no input) or $02 for second choice
+choice_text_show_pax
+  jsr choice_clear_text_line          ; clear line that text is one (sets colours to black, keeps chars)
+  jsr choice_timer_prepare            ; prepare timer
+  lda #$17                            ; set plot y to $17 (23)
+  sta Z_SCR_Y                         ; store in plot y
+  lda #$01                            ; set default choice to first choice
+choice_txt_sh_pax_redraw
+  cmp #$01                            ; check if choice is first choice
+  pha                                 ; push to stack before branching to save for later use
+  bne choice_txt_sh_pax_2             ; if not, draw as second choice
+  lda #<data_str_pg1_pax_choice1_sel  ; otherwise, continue to draw FIRST choice as SELECTED, get low byte of selected choice 1 str
+  sta Z_ADDR_1_LOW                    ; store in addr 1 low byte
+  lda #>data_str_pg1_pax_choice1_sel  ; get high byte of selected choice 1 str
+  sta Z_ADDR_1_HIGH                   ; store in addr 1 high byte
+  lda #$0A                            ; set x to middle of left side (10)
+  sta Z_SCR_X                         ; store in plot x (let plot_set_center_x_on_str update variables automatically)
+  jsr plot_set_center_x_on_str        ; calcualte and set plot x to x to allow for centered string draw
+  ldx #CN_COL_VAL_WHITE               ; set X to white colour value for char list draw
+  jsr draw_chars_list_with_col        ; draw string
+  lda #<data_str_pg1_pax_choice2_un   ; draw SECOND choice as UNSELECTED, get low byte of selected choice 1 str
+  sta Z_ADDR_1_LOW                    ; store in addr 1 low byte
+  lda #>data_str_pg1_pax_choice2_un   ; get high byte of selected choice 1 str
+  sta Z_ADDR_1_HIGH                   ; store in addr 1 high byte
+  lda #$1E                            ; set x to middle of right side (20)
+  sta Z_SCR_X                         ; store in plot x (let plot_set_center_x_on_str update variables automatically)
+  jsr plot_set_center_x_on_str        ; calcualte and set plot x to x to allow for centered string draw
+  ldx #CN_COL_VAL_WHITE               ; set X to white colour value for char list draw
+  jsr draw_chars_list_with_col        ; draw string
+  jmp choice_txt_sh_pax_cont
+choice_txt_sh_pax_2
+  lda #<data_str_pg1_pax_choice1_un   ; draw FIRST choice as UNSELECTED, get low byte of selected choice 1 str
+  sta Z_ADDR_1_LOW                    ; store in addr 1 low byte
+  lda #>data_str_pg1_pax_choice1_un   ; get high byte of selected choice 1 str
+  sta Z_ADDR_1_HIGH                   ; store in addr 1 high byte
+  lda #$0A                            ; set x to middle of left side (10)
+  sta Z_SCR_X                         ; store in plot x (let plot_set_center_x_on_str update variables automatically)
+  jsr plot_set_center_x_on_str        ; calcualte and set plot x to x to allow for centered string draw
+  ldx #CN_COL_VAL_WHITE               ; set X to white colour value for char list draw
+  jsr draw_chars_list_with_col        ; draw string
+  lda #<data_str_pg1_pax_choice2_sel  ; draw SECOND choice as SELECTED, get low byte of selected choice 1 str
+  sta Z_ADDR_1_LOW                    ; store in addr 1 low byte
+  lda #>data_str_pg1_pax_choice2_sel  ; get high byte of selected choice 1 str
+  sta Z_ADDR_1_HIGH                   ; store in addr 1 high byte
+  lda #$1E                            ; set x to middle of right side (20)
+  sta Z_SCR_X                         ; store in plot x (let plot_set_center_x_on_str update variables automatically)
+  jsr plot_set_center_x_on_str        ; calcualte and set plot x to x to allow for centered string draw
+  ldx #CN_COL_VAL_WHITE               ; set X to white colour value for char list draw
+  jsr draw_chars_list_with_col        ; draw string
+choice_txt_sh_pax_cont
+  jsr FN_GETIN                        ; use kernal GETIN function, get key input if any
+  cmp #$00                            ; check if no (null) input
+  bne choice_txt_sh_pax_key           ; if has input, check it
+  ;jsr choice_timer_handler            ; otherwise update timer handler
+  ;cmp #$00                            ; check if handler returned zero
+  ;beq choice_txt_sh_pax_fin           ; if is then timer finished, choice is made, time to exit routine
+  jmp choice_txt_sh_pax_cont          ; otherwise continue waiting for key
+choice_txt_sh_pax_key
+  cmp #CN_ASCII_A                     ; check if is A (left key)
+  beq choice_txt_sh_pax_left          ; if is then go to left key handler
+  cmp #CN_ASCII_D                     ; check if is D (right key)
+  beq choice_txt_sh_pax_right         ; if is then go to right key handler
+  jmp choice_txt_sh_pax_cont          ; otherwise loop
+choice_txt_sh_pax_left
+  pla                                 ; pull existing choice value from stack
+  cmp #$01                            ; check if already equals left
+  beq choice_txt_sh_pax_cont          ; if so don't process, nothing to do, continue with loop
+  lda #$01                            ; otherwise load A with choice 1 signified $01
+  jmp choice_txt_sh_pax_redraw        ; then redraw with new choice selection
+choice_txt_sh_pax_right
+  pla                                 ; pull existing choice value from stack
+  cmp #$02                            ; check if already equals right
+  beq choice_txt_sh_pax_cont          ; if so don't process, nothing to do, continue with loop
+  lda #$02                            ; otherwise load A with choice 1 signified $01
+  jmp choice_txt_sh_pax_redraw        ; then redraw with new choice selection
+choice_txt_sh_pax_fin
+  pla                                 ; pull choice value from stack to A
+  rts                                 ; return with choice value in A
+
+
+; === choice_timer_prepare
+;   prepares choice timer variables used in z page for timer routine
+choice_timer_prepare
+  lda #$C0                            ; load low byte of start of last line of screen memory
+  sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
+  lda Z_COL_START_HIGH                ; load col map mem start high byte
+  clc                                 ; clear carry flag before addition
+  adc #$03                            ; add $03 to get to last page of memory
+  sta Z_ADDR_4_HIGH                   ; store in addr 4 high byte
+  lda #$0A                            ; load $0A (10), timer largest counter (represents 10-ish seconds of full delay)
+  sta Z_CHOICE_C_1                    ; store in choice counter 1
+  lda #$05                            ; load starting max value of middle counter
+  sta Z_CHOICE_C_2                    ; store in choice counter 2
+  lda #$FF                            ; load starting max value of smallest counter
+  sta Z_CHOICE_C_3                    ; store in choice counter 3
+  rts                
+  
+
+; === choice_timer_handler
+;   handles display and count down of timer bar from bottom, should be called as much as possible
+; notes:
+;   this method is very inexact, but should give a rough approximation of the time limit
+; assumptions:
+;   choice_timer_prepare MUST BE EXECUTED before running this routine choice_timer_handler
+;   the last row of characters MUST BE blocks to that they can be coloured by this routine setting col map mem
+; params:
+;   none
+; uses:
+;   A, Y
+;   Z_CHOICE_TEMP_1
+;   Z_CHOICE_C_1 / 2 / 3  - assumes keeps values betweens calls
+;   Z_ADDR_4_LOW / HIGH   - assumes keeps values betweens calls
+; side effects:
+;   writes to screen, last line of current colour map
+; returns:
+;   A - value of (largest) counter, between $0A at start, down to $00 when finished
+choice_timer_handler
+  lda Z_CHOICE_C_1                    ; first check largest counter
+  beq choice_tmr_hndlr_finish         ; if zero then already finished, skip to end
+  dec Z_CHOICE_C_3                    ; decrease value of smallest counter
+  lda Z_CHOICE_C_3                    ; load smallest counter value (auto zero check)
+  bne choice_tmr_hndlr_draw           ; if not expired to $00, continue to draw
+  lda #$FF                            ; otherwise load max value of smallest counter
+  sta Z_CHOICE_C_3                    ; store in temp 3
+  dec Z_CHOICE_C_2                    ; decrease value of middle counter
+  lda Z_CHOICE_C_2                    ; load middle counter value (auto zero check)
+  bne choice_tmr_hndlr_draw           ; if not expired to $00, continue to draw
+  lda #$05                            ; otherwise load max value of middle counter
+  sta Z_CHOICE_C_2                    ; store in temp 3
+  dec Z_CHOICE_C_1                    ; decrease value of largest counter, and continue to draw
+choice_tmr_hndlr_draw
+  lda #$C0                            ; load low byte of start of last line of screen memory
+  sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
+  ldy #$00                            ; zero Y for indirect addressing, and counter
+  lda #CN_COL_VAL_WHITE               ; set A to white colour
+choice_tmr_hndlr_left_loop
+  cpy Z_CHOICE_C_1                 ; compare current Y against modified largest counter value
+  beq choice_tmr_hndlr_right_side
+  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
+  iny                                 ; Y++
+  jmp choice_tmr_hndlr_left_loop
+choice_tmr_hndlr_right_side
+  lda Z_CHOICE_C_1
+  clc
+  adc Z_ADDR_4_LOW
+  sta Z_ADDR_4_LOW
+  lda #$0A
+  clc
+  sbc Z_CHOICE_C_1
+  sta Z_CHOICE_TEMP_1
+  ldy #$00
+  lda #CN_COL_VAL_BLACK               ; otherwise select black, in A
+choice_tmr_hndlr_right_loop
+  cpy Z_CHOICE_TEMP_1                 ; compare current Y against modified largest counter value
+  beq choice_tmr_hndlr_finish
+  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
+  iny                                 ; Y++
+  jmp choice_tmr_hndlr_right_loop
+choice_tmr_hndlr_finish
+  lda Z_CHOICE_C_1                    ; finally load value of largest counter to return with from routine
+  rts
+  ;---------
+  ; left side
+;  lda #$C0                            ; load low byte of start of last line of screen memory
+;  sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
+;  lda #$0A                            ; load max largest counter value
+;  clc
+;  sbc Z_CHOICE_C_1                    ; subtract current largest counter value from it (invert)
+;  lsr                                 ; A<< left shift, i.e. multiply by 2
+;  sta Z_CHOICE_TEMP_1                 ; store in temp 4
+;  ldy #$00                            ; zero Y for indirect addressing, and counter
+;choice_tmr_hndlr_left_loop
+;  cpy Z_CHOICE_TEMP_1                 ; compare current Y against modified largest counter value
+;  bpl choice_tmr_hndlr_left_fill      ; if >= then draw filled square at current loc
+;  lda #CN_COL_VAL_BLACK               ; otherwise select black, in A
+;  jmp choice_tmr_hndlr_left_cont      ; then continue to draw
+;choice_tmr_hndlr_left_fill
+;  lda #CN_COL_VAL_WHITE               ; set A to white
+;choice_tmr_hndlr_left_cont
+;  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
+;  iny                                 ; Y++
+;  sta (Z_ADDR_4_LOW), Y               ; save another colour
+;  iny                                 ; Y++
+;  cpy #$14                            ; check if left side at end (20) and done
+;  bne choice_tmr_hndlr_left_loop      ; if not continue left side loop
+;  ; right side
+;  lda #$D4                            ; load low byte for right side of last line ($C0 + $14 = $D4)
+;  sta Z_ADDR_4_LOW                    ; store in addr 4 low byte
+;  lda Z_CHOICE_C_1                    ; load current largest counter value
+;  lsr                                 ; A<< left shift, i.e. multiply by 2
+;  sta Z_CHOICE_TEMP_1                 ; store in temp 4
+;  ldy #$00                            ; zero Y for indirect addressing, and counter
+;choice_tmr_hndlr_right_loop
+;  cpy Z_CHOICE_TEMP_1                 ; compare current Y against modified largest counter value
+;  bmi choice_tmr_hndlr_right_fill     ; if < then draw filled square at current loc
+;  lda #CN_COL_VAL_BLACK               ; otherwise select black, in A
+;  jmp choice_tmr_hndlr_right_cont     ; then continue to draw
+;choice_tmr_hndlr_right_fill
+;  lda #CN_COL_VAL_WHITE               ; set A to white
+;choice_tmr_hndlr_right_cont
+;  sta (Z_ADDR_4_LOW), Y               ; save colour in current col map mem position
+;  iny                                 ; Y++
+;  sta (Z_ADDR_4_LOW), Y               ; save another colour
+;  iny                                 ; Y++
+;  cpy #$14                            ; check if right side at end (20) and done
+;  bne choice_tmr_hndlr_right_loop     ; if not continue right side loop
+;choice_tmr_hndlr_finish
+;  lda Z_CHOICE_C_1                    ; finally load value of largest counter to return with from routine
+;  rts
+
+
+; === choice_clear_text_line
+choice_clear_text_line
+  lda #$00                            ; load $00 for plot x
+  sta Z_SCR_X                         ; store in plot x
+  lda #$17                            ; load $17 (23) for plot y
+  sta Z_SCR_Y                         ; store in plot y
+  jsr plot_set_xy                     ; update plot variables
+  ldy #$00                            ; set Y for indirect addressing, and counter
+  lda #CN_COL_VAL_BLACK               ; set colour black
+choice_clr_txt_ln_loop
+  sta (Z_COL_LOW_BYTE), Y             ; store in next location
+  iny                                 ; Y++
+  cpy #$28                            ; check if reached end of line
+  bne choice_clr_txt_ln_loop          ; if not, loop
+  rts                                 ; otherwise done
 
 
 ;==========================================================
@@ -3842,12 +4087,18 @@ data_str_pg1_pax_line1
 data_str_pg1_pax_line2
 !byte $14
 !scr  "will you worship me?"
-data_str_pg1_pax_choice1
-!byte $08
-!scr  "deny pax"
-data_str_pg1_pax_choice2
-!byte $08
-!scr  "worship pax"
+data_str_pg1_pax_choice1_un
+!byte $0A
+!scr  " deny pax "
+data_str_pg1_pax_choice1_sel
+!byte $0A
+!scr  "[deny pax]"
+data_str_pg1_pax_choice2_un
+!byte $0D
+!scr  " worship pax "
+data_str_pg1_pax_choice2_sel
+!byte $0D
+!scr  "[worship pax]"
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
 debug_label_end_of_tables_strings   ; = $3097 in this version
