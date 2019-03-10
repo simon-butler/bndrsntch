@@ -17,7 +17,7 @@
 ;   $0002 - $007F   : general purpose
 ;   $0080 - $00FF   : transferred tables
 ; $0400 - $07FF     : main screen, in bank 0, used for loading screen
-; $1000 - $2000     : main code and routines
+; $1000 - $20FF     : main code and routines (current end $20cb)
 ; $3000 - $3200     : game logic tables and data, and strings
 ; $4400 - $47FF     : screen for first person mode (bank 1)
 ; $5000 - $57FF     : character map for first person (bank 1) written directly by loader
@@ -1678,21 +1678,34 @@ fill_mem_finish
   rts
 
 
-; === copy_map_chars_to_screen
-;   map copy routine from stored memory location to screen, characters only, does not set any colour map data
+; === copy_mem
+;   copy block of memory from one arbitrary location to another
 ; assumptions:
 ;   there is at least one byte to write, if addr 1 == addr 2 entirely, this routine with have undefined results
 ; params:
 ;   Z_ADDR_1_HIGH / LOW - from memory location (inclusive) to write to
 ;   Z_ADDR_2_HIGH / LOW - to memory location (exclusive) to write to
 ;   Z_ADDR_3_HIGH / LOW - start memory location (inclusive) for reading
-;   A - byte to fill
 ; uses:
-;   A, X, Y
+;   A, Y
 ; side effects:
 ;   none
+; returns:
+;   area of memory to copy to (addr 1 - addr 2) has been copied to
 copy_mem
   ldy #$00                  ; zero Y register
+  ; --- START SPEED CODE
+copy_mem_unrolled_check     ; this is where we check to see if we can do an entire page as an unrolled loop, saving dozens of cycles
+  lda Z_ADDR_1_LOW          ; entire page must start at zero, check starting position low byte is $00
+  bne copy_mem_loop         ; if not zero (zero flag auto set when loading to A) can't do unrolled loop, skip to main loop
+  lda Z_ADDR_1_HIGH         ; load starting high byte mem addr 1
+  cmp Z_ADDR_2_HIGH         ; check against ending high byte
+  beq copy_mem_loop         ; if match then not a full page to do, can't do unrolled loop, skip to main loop
+  jsr sub_copy_mem_unrolled_page    ; jump to sub routine to do an entire page
+  inc Z_ADDR_1_HIGH         ; next write to page
+  inc Z_ADDR_3_HIGH         ; next read from page
+  jmp copy_mem_unrolled_check
+  ; --- END SPEED CODE
 copy_mem_loop
   lda (Z_ADDR_3_LOW), Y     ; read byte from source
   sta (Z_ADDR_1_LOW), Y     ; store byte to fill in next address
@@ -1931,6 +1944,7 @@ plot_pull_scr_col_buffers
   sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
   lda #>data_buffer_scr_chars       ; get high byte of screen chars buffer
   sta Z_ADDR_3_HIGH                 ; store in addr 3 high byte
+  jsr wait_for_end_raster
   jsr copy_mem                      ; copy col mem to storage mem
   lda #CN_SCR_OFFSET_START          ; get low byte of screen data start
   sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
@@ -1944,6 +1958,7 @@ plot_pull_scr_col_buffers
   sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
   lda #>data_buffer_col_map         ; get high byte of col map buffer
   sta Z_ADDR_3_HIGH                 ; store in addr 3 high byte
+  jsr wait_for_end_raster
   jsr copy_mem                      ; copy col mem to storage mem
   rts
 
@@ -2175,7 +2190,7 @@ load_z_tables_finish
 
 ; === sub_fill_mem_unrolled_page
 ;   unrolled loop to fill a page of memory with a byte
-;   NOTE: this routine takes up 768 bytes, nearly a full page! if running out of space it could be commented out
+;   NOTE: this routine takes up 768 bytes, 3 full pages! if running out of space it could be commented out
 ; assumptions:
 ;   Y is already set to zero
 ; params:
@@ -2703,8 +2718,796 @@ sub_fill_mem_unrolled_page
   iny                       ; back to $00
   rts
 
+; === sub_copy_mem_unrolled_page
+;   unrolled loop to copy a page of memory to a different page
+; notes:
+;   addr 1 / 3 doesn't technically start at page start, but if indirect [LDA (Oper), Y] crosses page, then adds a cycle used
+;   this routine takes up 1281 bytes, 5 pages and 1 byte! if running out of space it could be commented out
+; assumptions:
+;   Y is already set to zero
+; params:
+;   Z_ADDR_1_LOW / HIGH - set to starting point of memory page 
+;   Z_ADDR_3_LOW / HIGH - set to starting point of memory page (doesn't technically need to be start of page at low byte $00)
+; uses:
+;   A, Y
+;   Z_ADDR_1_LOW / HIGH, Z_ADDR_3_LOW / HIGH
+; side effects:
+;   none
+; returns:
+;   none
+sub_copy_mem_unrolled_page
+  lda (Z_ADDR_3_LOW), Y     ; get byte from read page
+  sta (Z_ADDR_1_LOW), Y     ; store byte in write page
+  iny                       ; $01
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $02
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $03
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $04
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $05
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $06
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $07
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $08
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $09
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0A
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0B
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0C
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0D
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0E
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $0F
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $10
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $20
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $30
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $40
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $50
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $60
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $70
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $80
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $90
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $A0
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $B0
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $C0
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $D0
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; $E0
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; F0
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny
+  lda (Z_ADDR_3_LOW), Y
+  sta (Z_ADDR_1_LOW), Y
+  iny                       ; Y back to $00, wraps
+  rts                       ; finished
+
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_routines   ; = $198c in this version
+debug_label_end_of_routines   ; = $20cb in this version
 
 
 ;==========================================================
