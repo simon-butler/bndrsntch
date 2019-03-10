@@ -5,6 +5,7 @@
 ;
 ;==========================================================
 
+
 ;==========================================================
 ; MEMORY MAP
 ;
@@ -25,6 +26,14 @@
 ; $8400 - $87FF     : screen for map mode (bank 2) written to directly by loader
 ; $C000 - $C3FF     : colour map copy and image data
 ; 
+;==========================================================
+
+
+;==========================================================
+; NOTES
+;
+; # screen / colour map memory ALWAYS starts at low byte $00, i.e. the start of a page.
+;     this goes for all uncompressed screen representations, buffers, etc.
 ;==========================================================
 
 
@@ -75,50 +84,41 @@ CN_VID_BANK_1           = $02
 CN_VID_BANK_2           = $01
 CN_VID_BANK_3           = $00
 
+CN_SCR_OFFSET_START     = $00   ; just here for readability, instead of using a raw $00 in code
+CN_SCR_OFFSET_END_L     = $E8
+CN_SCR_OFFSET_END_H     = $03
+CN_SCR_OFFSET_HALF_L    = $08
+CN_SCR_OFFSET_HALF_H    = $02
+
 ; video bank 0
-CN_BK0_SCR_START_LOW    = $00
 CN_BK0_SCR_START_HIGH   = $04
-CN_BK0_SCR_END_LOW      = $E8
 CN_BK0_SCR_END_HIGH     = $07
 
-CN_BK0_CHMAP_START_LOW  = $00
 CN_BK0_CHMAP_START_HIGH = $C0
-CN_BK0_CHMAP_END_LOW    = $FF
 CN_BK0_CHMAP_END_HIGH   = $CF
 
 ; video bank 1
-CN_BK1_SCR_START_LOW    = $00
 CN_BK1_SCR_START_HIGH   = $44
-CN_BK1_SCR_END_LOW      = $E8
+CN_BK1_SCR_HALF_HIGH    = $46
 CN_BK1_SCR_END_HIGH     = $47
 
-CN_BK1_SCR_MIDLINE_LOW  = $08   ; midline is up to and including the first 13 lines
-CN_BK1_SCR_MIDLINE_HIGH = $46
+CN_BK1_CHMAP_START_L    = $00
+CN_BK1_CHMAP_START_H    = $50
+CN_BK1_CHMAP_END_L      = $FF
+CN_BK1_CHMAP_END_H      = $5F
 
-CN_BK1_CHMAP_START_LOW  = $00
-CN_BK1_CHMAP_START_HIGH = $50
-CN_BK1_CHMAP_END_LOW    = $FF
-CN_BK1_CHMAP_END_HIGH   = $5F
-
-CN_BK1_SPRITE_POINTER_0 = $47F8
+CN_BK1_SPRITE_PTR_0     = $47F8
 
 ; video bank 2
-CN_BK2_SCR_START_LOW    = $00
 CN_BK2_SCR_START_HIGH   = $84
-CN_BK2_SCR_END_LOW      = $E8
 CN_BK2_SCR_END_HIGH     = $87
 
 ; video bank 3
-CN_BK3_SCR_START_LOW    = $00   ; bank 3 not used, just here for helper generalisation completeness
 CN_BK3_SCR_START_HIGH   = $C4
-CN_BK3_SCR_END_LOW      = $E8
 CN_BK3_SCR_END_HIGH     = $C7
 
-CN_COL_MEM_START_LOW    = $00
+; colour map mem
 CN_COL_MEM_START_HIGH   = $D8
-CN_COL_MEM_MIDLINE_LOW  = $08   ; midline is up to and including the first 13 lines
-CN_COL_MEM_MIDLINE_HIGH = $DA
-CN_COL_MEM_END_LOW      = $E8
 CN_COL_MEM_END_HIGH     = $DB
 
 ; PESCII characters
@@ -175,28 +175,26 @@ Z_SCR_LOW_BYTE    = $04
 Z_SCR_HI_BYTE     = $05
 Z_COL_LOW_BYTE    = $06
 Z_COL_HI_BYTE     = $07
-Z_SCR_START_LOW   = $08   ; this is set by the set_video_bank function, can be overridden
+Z_SCR_START_LOW   = $08   ; this is set ONCE in init_helper_vars and doesn't need to be updated, always $00
 Z_SCR_START_HIGH  = $09
+Z_COL_START_LOW   = $10   ; this is set ONCE in init_helper_vars and doesn't need to be updated, always $00
+Z_COL_START_HIGH  = $11
 
 ; general purpose low/high address pairs
-Z_ADDR_1_LOW      = $10
-Z_ADDR_1_HIGH     = $11
-Z_ADDR_2_LOW      = $12
-Z_ADDR_2_HIGH     = $13
-Z_ADDR_3_LOW      = $14
-Z_ADDR_3_HIGH     = $15
-Z_ADDR_4_LOW      = $16
-Z_ADDR_4_HIGH     = $17
+Z_ADDR_1_LOW      = $12
+Z_ADDR_1_HIGH     = $13
+Z_ADDR_2_LOW      = $14
+Z_ADDR_2_HIGH     = $15
+Z_ADDR_3_LOW      = $16
+Z_ADDR_3_HIGH     = $17
+Z_ADDR_4_LOW      = $18
+Z_ADDR_4_HIGH     = $19
 
-Z_TEMP_1          = $18
-Z_TEMP_2          = $19
-Z_TEMP_3          = $1A
-Z_TEMP_4          = $1B
-Z_TEMP_5          = $1C
-
-Z_PSH_REG_A       = $1D
-Z_PSH_REG_X       = $1E
-Z_PSH_REG_Y       = $1F
+Z_TEMP_1          = $1A
+Z_TEMP_2          = $1B
+Z_TEMP_3          = $1C
+Z_TEMP_4          = $1D
+Z_TEMP_5          = $1E
 
 ; working vars for specific routines
 Z_BYTE_MATCH_LOW        = $20
@@ -290,7 +288,7 @@ map_entry_first_time
   lda #CN_COL_VAL_BLACK                 ; set background colour to black
   sta VIC_BG_COL
   ;lda #CN_COL_VAL_D_GREY               ; fill screen with GREY colour, for test purposes
-  jsr fill_screen_cols                  ; fill screen with black colour, black characters on black, i.e. nothing visible
+  jsr plot_fill_col_map                 ; fill screen with black colour, black characters on black, i.e. nothing visible
   jmp map_loop_update_player            ; skip to main map loop
 map_entry
   lda #CN_VID_BANK_2                    ; load code for video bank 2
@@ -436,9 +434,9 @@ det_loc_type_row_err
   ldx #$FF                          ; set row to error code
   ; TODO : remove this error handing, debug only, make fatal
   lda #$53    ;heart char
-  jsr fill_screen_chars
+  jsr plot_fill_char_scr
   lda #$02
-  jsr fill_screen_cols
+  jsr plot_fill_col_map
   jmp *
 det_loc_type_finish
   stx Z_PLYR_LOC_TYPE
@@ -515,7 +513,7 @@ upd_plyr_look_ahead_loop
   beq upd_plyr_look_ahead_found     ; found match for type
   inx                               ; otherwise X++, row to next row
   cpx #$07                          ; check if row is on 8th row, i.e. gone past end
-  beq upd_plyr_look_ahead_err          ; if so, go to error state, exit
+  beq upd_plyr_look_ahead_err       ; if so, go to error state, exit
   lda Z_PLYR_LOOK_AHEAD_TY_ADDR_LOW ; get low byte of current addr 1 ptr
   clc                               ; clear carry flag before addition
   adc #$08                          ; add 8 to low byte count, i.e. next row (assumes does not cross page)
@@ -528,9 +526,9 @@ upd_plyr_look_ahead_err
   ldx #$FF                          ; set row to error code
   ; TODO : remove this error handing, debug only, make fatal
   lda #$00    ;at @ char
-  jsr fill_screen_chars
+  jsr plot_fill_char_scr
   lda #$03
-  jsr fill_screen_cols
+  jsr plot_fill_col_map
   jmp *
 upd_plyr_look_ahead_off
   lda #$FF
@@ -773,22 +771,18 @@ show_pl_facing_str_finish
 ; params:
 ;   none
 save_map_highlights
-  lda #<data_col_map_backup         ; store low byte of mem storage in addr 1 low byte
-  sta Z_ADDR_1_LOW
+  lda #CN_SCR_OFFSET_START          ; get low byte of screen mem type start
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  sta Z_ADDR_3_LOW                  ; store same in addr 3 low byte
+  lda #CN_SCR_OFFSET_END_L          ; get low byte of screen mem type end
+  sta Z_ADDR_2_LOW                  ; store in addr 2 low byte
   lda #>data_col_map_backup         ; store high byte of mem storage in addr 1 high byte
   sta Z_ADDR_1_HIGH
-  lda #<data_col_map_backup         ; load low byte of mem storage
-  clc                               ; clear carry flag before addition
-  adc #$E8                          ; add $E8 to low byte, puts to end of block of 1000 bytes (screen size)
-  sta Z_ADDR_2_LOW                  ; store in addr 2 low byte
-  lda #>data_col_map_backup         ; load high byte of mem storage
   clc                               ; clear carry flag
-  adc #$03                          ; add $03 to high byte, puts to end of block of 1000 bytes
+  adc #CN_SCR_OFFSET_END_H          ; add end offset of screen mem type size
   sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
-  lda #CN_COL_MEM_START_LOW         ; store low byte of memory storage start in addr 3 low byte
-  sta Z_ADDR_3_LOW
-  lda #CN_COL_MEM_START_HIGH        ; store high byte of memory storage start in addr 3 high byte
-  sta Z_ADDR_3_HIGH
+  lda Z_COL_START_HIGH              ; get high byte of col mem start
+  sta Z_ADDR_3_HIGH                 ; store in addr 3 high byte
   jsr copy_mem                      ; copy col mem to storage mem
   rts
 
@@ -803,19 +797,19 @@ save_map_highlights
 ; params:
 ;   none
 restore_map_highlights
-  lda #CN_COL_MEM_START_LOW         ; store low byte of col mem start in addr 1 low byte
-  sta Z_ADDR_1_LOW
-  lda #CN_COL_MEM_START_HIGH        ; store high byte of col mem start in addr 1 high byte
-  sta Z_ADDR_1_HIGH
-  lda #CN_COL_MEM_END_LOW           ; store low byte of col mem end in addr 2 low byte
-  sta Z_ADDR_2_LOW
-  lda #CN_COL_MEM_END_HIGH          ; store high byte of col mem end in addr 2 high byte
-  sta Z_ADDR_2_HIGH
-  lda #<data_col_map_backup         ; store low byte of memory storage start in addr 3 low byte
-  sta Z_ADDR_3_LOW
-  lda #>data_col_map_backup         ; store high byte of memory storage start in addr 3 high byte
-  sta Z_ADDR_3_HIGH
-  jsr copy_mem
+  lda #CN_SCR_OFFSET_START          ; get low byte of screen mem type start
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  sta Z_ADDR_3_LOW                  ; store same in addr 3 low byte
+  lda #CN_SCR_OFFSET_END_L          ; get low byte of screen mem type end
+  sta Z_ADDR_2_LOW                  ; store in addr 2 low byte
+  lda Z_COL_START_HIGH              ; get high byte of col mem start
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  clc                               ; clear carry flag
+  adc #CN_SCR_OFFSET_END_H          ; add end offset of screen mem type size
+  sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
+  lda #>data_col_map_backup         ; get high byte of mem storage
+  sta Z_ADDR_3_HIGH                 ; store in addr 3 high byte
+  jsr copy_mem                      ; copy storage backup to active col mem
   rts
 
 
@@ -835,9 +829,7 @@ restore_map_highlights
 update_stored_map_highlights
   jsr get_video_bank                ; get current video bank code (to restore plot bank after routine work)
   pha                               ; push current video bank code to stack
-  lda #<data_col_map_backup         ; store low byte of col map mem storage for plot routines
-  sta Z_SCR_START_LOW
-  lda #>data_col_map_backup         ; store high byte of col map mem storage for plot routines
+  lda #>data_col_map_backup         ; store high byte of col map mem storage for plot routines (don't need to set low byte)
   sta Z_SCR_START_HIGH
   lda Z_PLYR_POS_X                  ; store player x in plot x
   sta Z_SCR_X
@@ -845,7 +837,7 @@ update_stored_map_highlights
   sta Z_SCR_Y
   jsr plot_set_xy
   ldy #$00                          ; Y = 0, for indirect addressing
-  lda #CN_COL_VAL_D_GREY            ; load drak grey colour
+  lda #CN_COL_VAL_D_GREY            ; load dark grey colour
   sta (Z_SCR_LOW_BYTE), Y           ; store grey in map col mem storage
   pla                               ; pull video bank code from stack
   jsr plot_set_bank                 ; restore video bank used by plot routines
@@ -857,39 +849,12 @@ update_stored_map_highlights
 
 ; === draw_two_tone_bg
 draw_two_tone_bg
-  ; fill entire colour memory (foreground) with black
-  lda #CN_COL_MEM_START_LOW
-  sta Z_ADDR_1_LOW
-  lda #CN_COL_MEM_START_HIGH
-  sta Z_ADDR_1_HIGH
-  lda #CN_COL_MEM_END_LOW
-  sta Z_ADDR_2_LOW
-  lda #CN_COL_MEM_END_HIGH
-  sta Z_ADDR_2_HIGH
-  lda #CN_COL_VAL_BLACK
-  jsr fill_mem
-  ; fill scr mem first half with blocks (makes black)
-  lda #CN_BK1_SCR_START_LOW
-  sta Z_ADDR_1_LOW
-  lda #CN_BK1_SCR_START_HIGH
-  sta Z_ADDR_1_HIGH
-  lda #CN_BK1_SCR_MIDLINE_LOW
-  sta Z_ADDR_2_LOW
-  lda #CN_BK1_SCR_MIDLINE_HIGH
-  sta Z_ADDR_2_HIGH
-  lda #CN_SPEC_CHAR_BLOCK
-  jsr fill_mem
-  ; fill scr mem first half with spaces (makes see through, i.e. bg col, i.e. light blue)
-  lda #CN_BK1_SCR_MIDLINE_LOW
-  sta Z_ADDR_1_LOW
-  lda #CN_BK1_SCR_MIDLINE_HIGH
-  sta Z_ADDR_1_HIGH
-  lda #CN_BK1_SCR_END_LOW
-  sta Z_ADDR_2_LOW
-  lda #CN_BK1_SCR_END_HIGH
-  sta Z_ADDR_2_HIGH
-  lda #CN_SPEC_CHAR_BLANK
-  jsr fill_mem
+  lda #CN_COL_VAL_BLACK             ; get black colour in A
+  jsr plot_fill_col_map             ; fill colour map with black
+  lda #CN_SPEC_CHAR_BLOCK           ; get block char in A
+  jsr plot_fill_char_scr_half_1     ; fill first half of screen with block
+  lda #CN_SPEC_CHAR_BLANK           ; get blank char in A
+  jsr plot_fill_char_scr_half_2     ; fill second half of screen with blank (makes see through, see background col)
   rts
 
 ; === draw_corridor
@@ -1132,11 +1097,11 @@ draw_sprite_pax_cont
   sta VIC_SPRITE_EXP_HORZ         ; set sprite horizontal expansion register (A already set)
   sta VIC_SPRITE_EXP_VERT         ; set sprite vertical expansion register
   ldx #$80                        ; load first sprite pointer to first sprite (head) in X (used for inx convienence)
-  stx CN_BK1_SPRITE_POINTER_0     ; store in sprite pointer 0
+  stx CN_BK1_SPRITE_PTR_0         ; store in sprite pointer 0
   inx                             ; X++, $81, next sprite of Pax (body)
-  stx CN_BK1_SPRITE_POINTER_0 + 1 ; store in sprite pointer 1
+  stx CN_BK1_SPRITE_PTR_0 + 1     ; store in sprite pointer 1
   inx                             ; X++, $82, next sprite of Pax (legs)
-  stx CN_BK1_SPRITE_POINTER_0 + 2 ; store in sprite pointer 2
+  stx CN_BK1_SPRITE_PTR_0 + 2     ; store in sprite pointer 2
   lda #$06                        ; get (dark) blue colour value
   sta VIC_SPRITE_COL_0            ; set sprite 0 col white
   sta VIC_SPRITE_COL_0 + 1        ; set sprite 1 col white
@@ -1150,7 +1115,7 @@ draw_sprite_pax_cont
   ldx Z_TEMP_1                    ; get near flag from temp 1 to X
   clc                             ; clear carry flag before addition
   adc #$15                        ; A += $15 (21), calculate y pos of next sprite
-  cpx #$00                         ; check if near flag not set
+  cpx #$00                        ; check if near flag not set
   beq draw_sprite_pax_y2          ; if not set, continue to y2
   clc                             ; otherwise clear carry flag before addition
   adc #$15                        ; and A += $15 again
@@ -1158,7 +1123,7 @@ draw_sprite_pax_y2
   sta VIC_SPRITE_POS_REGS + 3     ; store Y in y pos for sprite 1
   clc                             ; clear carry flag before addition
   adc #$15                        ; A += $15 (21), calculate y pos of next sprite
-  cpx #$00                         ; check if near flag not set
+  cpx #$00                        ; check if near flag not set
   beq draw_sprite_pax_y3          ; if not set, continue to y3
   clc                             ; otherwise clear carry flag before addition
   adc #$15                        ; and A += $15 again
@@ -1176,7 +1141,7 @@ draw_sprite_pax_y3
 ; === special_char_test
 ;   basic test, print out first $13 (19) characters
 special_char_test
-  lda #CN_BK1_SCR_START_LOW
+  lda #CN_SCR_OFFSET_START
   sta Z_ADDR_1_LOW
   lda #CN_BK1_SCR_START_HIGH
   sta Z_ADDR_1_HIGH
@@ -1215,7 +1180,7 @@ draw_corridor_test
 ;   expects screen to contain the large glyph symbol
 post_loading_effect
   lda #CN_COL_VAL_BLUE          ; set all foreground on col map to blue, same as background, so hides characters
-  jsr fill_screen_cols
+  jsr plot_fill_col_map
   jsr fx_loading_text_col_exception
   ldx #$03                      ; wait for 3 seconds
   ldy #$00                      ;   should not wait for additional frames
@@ -1226,7 +1191,7 @@ post_loading_effect
   sta VIC_BORDER_COL
   sta VIC_BG_COL
   lda #CN_COL_VAL_WHITE         ; set all foreground on col map to white
-  jsr fill_screen_cols
+  jsr plot_fill_col_map
   lda #$0A                      ; set up flash screen, flash 10 times only
   ldx #CN_COL_VAL_L_BLUE        ; first colour light green
   ldy #CN_COL_VAL_BLUE          ; second colour blue
@@ -1541,10 +1506,14 @@ wait_sec_bl_bf_finish
 ; uses:
 ;   A
 init_helper_vars
-  lda #CN_BK0_SCR_START_LOW
+  lda #CN_SCR_OFFSET_START      ; low byte is only set here, never needs to be updated again
   sta Z_SCR_START_LOW
   lda #CN_BK0_SCR_START_HIGH
   sta Z_SCR_START_HIGH
+  lda #CN_SCR_OFFSET_START      ; low byte only set once here
+  sta Z_COL_START_LOW
+  lda #CN_COL_MEM_START_HIGH
+  sta Z_COL_START_HIGH
   rts
 
 ; === enable_video_bank_selection
@@ -1591,50 +1560,6 @@ set_video_bank
 get_video_bank
   lda VIC_CIA2_BANK_SELECT      ; read value of bank selection register
   and #$FC                      ; mask out bits 0, 1 with AND
-  rts
-
-
-; === plot_set_bank
-;   sets the video bank used for plot routines
-; params:
-;   A - bank to select (must be number between $00 and $03 inclusive)
-; uses:
-;   A
-; side effects:
-;   none
-; returns:
-;   Z_SCR_START_LOW / HIGH changed to point at correct selected bank screen memory
-plot_set_bank
-  cmp #CN_VID_BANK_1            ; check if bank 1
-  beq plot_set_bank_1
-  cmp #CN_VID_BANK_2            ; check if bank 2
-  beq plot_set_bank_2
-  cmp #CN_VID_BANK_3            ; check if bank 3
-  beq plot_set_bank_3
-plot_set_bank_0                ; otherwise continue to set for bank 0
-  lda #CN_BK0_SCR_START_LOW
-  sta Z_SCR_START_LOW
-  lda #CN_BK0_SCR_START_HIGH
-  sta Z_SCR_START_HIGH
-  jmp plot_set_bank_finish
-plot_set_bank_1                ; set for bank 1
-  lda #CN_BK1_SCR_START_LOW
-  sta Z_SCR_START_LOW
-  lda #CN_BK1_SCR_START_HIGH
-  sta Z_SCR_START_HIGH
-  jmp plot_set_bank_finish
-plot_set_bank_2                ; set for bank 2
-  lda #CN_BK2_SCR_START_LOW
-  sta Z_SCR_START_LOW
-  lda #CN_BK2_SCR_START_HIGH
-  sta Z_SCR_START_HIGH
-  jmp plot_set_bank_finish
-plot_set_bank_3                ; set for bank 3
-  lda #CN_BK3_SCR_START_LOW
-  sta Z_SCR_START_LOW
-  lda #CN_BK3_SCR_START_HIGH
-  sta Z_SCR_START_HIGH
-plot_set_bank_finish
   rts
 
 
@@ -1696,46 +1621,6 @@ wait_for_key
   cmp #$00              ; check if no (null) input
   beq wait_for_key      ; if no input, continue to wait
   rts                   ; otherwise return
-
-; === fill_screen_chars
-;   fill entire screen with single character
-; params:
-;   A - character to fill screen with
-; uses:
-;   A, X, ADDR 1 H / L, ADDR 2 H / L
-; side effects:
-;   fill_mem:   A, X, Y
-fill_screen_chars
-  ldx #CN_BK2_SCR_START_LOW       ; set start / end addres in low / high for fill_mem call
-  stx Z_ADDR_1_LOW
-  ldx #CN_BK2_SCR_START_HIGH
-  stx Z_ADDR_1_HIGH
-  ldx #CN_BK2_SCR_END_LOW
-  stx Z_ADDR_2_LOW
-  ldx #CN_BK2_SCR_END_HIGH
-  stx Z_ADDR_2_HIGH
-  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
-  rts
-
-; === fill_screen_cols
-;   fill entire colour map with single colour
-; params:
-;   A - colour to fill colour map with
-; uses:
-;   A, X, ADDR 1 H / L, ADDR 2 H / L
-; side effects:
-;   fill_mem:   A, X, Y
-fill_screen_cols
-  ldx #CN_COL_MEM_START_LOW       ; set start / end addres in low / high for fill_mem call
-  stx Z_ADDR_1_LOW
-  ldx #CN_COL_MEM_START_HIGH
-  stx Z_ADDR_1_HIGH
-  ldx #CN_COL_MEM_END_LOW
-  stx Z_ADDR_2_LOW
-  ldx #CN_COL_MEM_END_HIGH
-  stx Z_ADDR_2_HIGH
-  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
-  rts
 
 
 ; === fill_mem
@@ -1890,10 +1775,67 @@ draw_chars_list_wc_next
   rts                       ; otherwise, done, finish
 
 
+; === plot_set_buffer
+;   sets plot start pointers to buffer, for char screen and col map
+; params:
+;   none
+; uses:
+;   A
+; side effects:
+;   Z_SCR_START_LOW / HIGH set to char scr buffer
+;   Z_COL_START_LOW / HIGH set to col map buffer
+plot_set_buffer
+  lda #>data_buffer_scr_chars
+  sta Z_SCR_START_HIGH
+  lda #>data_buffer_col_map
+  sta Z_COL_START_HIGH
+  rts
+
+; === plot_set_bank
+;   sets the video bank used for plot routines
+;   note, only needs to set high byte, low bytes of base addresses always stay the same
+; params:
+;   A - bank to select (must be number between $00 and $03 inclusive)
+; uses:
+;   A
+; side effects:
+;   sets colour mem start also
+; returns:
+;   Z_SCR_START_LOW / HIGH changed to point at correct selected bank screen memory
+;   Z_COL_START_LOW / HIGH points to real col map
+plot_set_bank
+  cmp #CN_VID_BANK_1            ; check if bank 1
+  beq plot_set_bank_1
+  cmp #CN_VID_BANK_2            ; check if bank 2
+  beq plot_set_bank_2
+  cmp #CN_VID_BANK_3            ; check if bank 3
+  beq plot_set_bank_3
+plot_set_bank_0                ; otherwise continue to set for bank 0
+  lda #CN_BK0_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+  jmp plot_set_bank_finish
+plot_set_bank_1                ; set for bank 1
+  lda #CN_BK1_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+  jmp plot_set_bank_finish
+plot_set_bank_2                ; set for bank 2
+  lda #CN_BK2_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+  jmp plot_set_bank_finish
+plot_set_bank_3                ; set for bank 3
+  lda #CN_BK3_SCR_START_HIGH
+  sta Z_SCR_START_HIGH
+plot_set_bank_finish
+  lda #CN_COL_MEM_START_HIGH
+  sta Z_COL_START_HIGH
+  rts
+
+
 ; === plot_set_xy
 ;   sets screen draw xy position, including color map position
 ; assumptions:
 ;   Z_SCR_START_LOW / HIGH are set correctly
+;   Z_COL_START_LOW / HIGH are set correctly
 ; params:
 ;   Z_SCR_X - x value
 ;   Z_SCR_Y - y value
@@ -1907,7 +1849,7 @@ plot_set_xy
   ldy Z_SCR_Y                           ; get y position from zero page var to Y
   lda Z_SCR_START_HIGH                  ; load high byte of screen start in A
   sta Z_SCR_HI_BYTE                     ; store in zero page
-  lda #CN_COL_MEM_START_HIGH            ; load high byte of color map start in A
+  lda Z_COL_START_HIGH                  ; load high byte of color map start in A
   sta Z_COL_HI_BYTE                     ; store in zero page
 set_last_xy_complex_add
   lda #$00                              ; zero A, will track low byte of address until end of routine
@@ -1971,115 +1913,157 @@ plot_inc_x_finish
   rts
 
 
-; === copy_visible_map_to_screen
-;   special map copy routine from stored memory location to screen, with coded colouring.
-;   colours maze as dark gray, blocks as white, and block edges as light grey.
+; === plot_fill_char_scr
+;   fill entire screen with single character
 ; params:
-;   X - page where map starts, i.e. the high byte, assumes starts at zero starting offset
+;   A - character to fill screen with
 ; uses:
-;   A, X, Y
+;   A, X
+;   ADDR 1 H / L, ADDR 2 H / L
 ; side effects:
-;   A, X, Y have random value after this routine
-; returns:
-;   none
-copy_visible_map_to_screen
-  stx Z_ADDR_3_HIGH                     ; X -> Z_ADDR_3_HIGH, input for page where map data exists
-  lda #$04
-  sta Z_ADDR_1_HIGH                     ; put high part of address $0400 (screen chars) zero temp 1 addr
-  lda #$D8
-  sta Z_ADDR_2_HIGH                     ; put high part of address $D800 (col map) zero temp 2 addr
-  lda #$00                              ; zero out low part of temp 1, 2, 3 and save to Y (for indirect mem access)
-  sta Z_ADDR_1_LOW
-  sta Z_ADDR_2_LOW
-  sta Z_ADDR_3_LOW
-  tay
-  lda #$03                              ; put page count for reaching end of screen block (1000 bytes) in temp 1 misc, low value E8 hardcoded below
-  sta Z_TEMP_1
-copy_vm2scr_loop
-  lda (Z_ADDR_3_LOW), Y                 ; load next character from memory
-  sta (Z_ADDR_1_LOW), Y                 ; store in character mem
-  ; match byte to map list, check for colouring
-  sty Z_TEMP_2                          ; save Y in temp storage
-  sta Z_TEMP_3                          ; save A in temp storage
-  ldx #<data_map_chars_list             ; X <- low byte addr of list
-  ldy #>data_map_chars_list             ; Y <- high byte addr of list
-  jsr match_byte_from_list
-  cmp #$FF                              ; compare with not found code $FF
-  beq copy_vm2scr_non_map_char
-copy_vm2scr_is_map_char
-  lda #$0B                              ; set colour to grey
-  jmp copy_vm2scr_set_col
-copy_vm2scr_non_map_char
-  lda Z_TEMP_3                          ; get A (character) from temp storage
-  cmp #$A0                              ; check if is full block (only used for centre)
-  beq copy_vm2scr_block_char
-  lda #$0F                              ; set colour to light gray
-  jmp copy_vm2scr_set_col
-copy_vm2scr_block_char
-  lda #$01                              ; set colour to white
-copy_vm2scr_set_col
-  ldy Z_TEMP_2                          ; restore Y from temp storage
-  sta (Z_ADDR_2_LOW), Y                 ; store col in col mem
-copy_vm2scr_next_pos
-  iny                                   ; increase Y offset, affects all pointers
-  cpy #$00
-  beq copy_vm2scr_next_page             ; check if byte wrapped around to #$00, if so add page
-  lda Z_TEMP_1                          ; load page counter to check if should check low byte amount
-  cmp #$00
-  bne copy_vm2scr_loop                  ; if didn't load zero then continue looping, only check low byte if no more pages left
-  cpy #$E8                              ; check Y offset pointer against last position
-  bne copy_vm2scr_loop                  ; if not equal, not finished yet, continue looping
-  jmp copy_vm2scr_finish                ; otherwise we're done, finish
-copy_vm2scr_next_page
-  inc Z_ADDR_1_HIGH                     ; increase page for all pointers
-  inc Z_ADDR_2_HIGH
-  inc Z_ADDR_3_HIGH
-  dec Z_TEMP_1                          ; decrease page counter by 1
-  jmp copy_vm2scr_loop                  ; continue, end is not exactly on a page
-copy_vm2scr_finish
+;   fill_mem:   A, X, Y, ADDR 1 H / L, ADDR 2 H / L
+plot_fill_char_scr
+  tax                             ; A -> X, save char to fill screen until after addresses set
+  lda #CN_SCR_OFFSET_START        ; load low byte for scr addr start
+  sta Z_ADDR_1_LOW                ; store in low byte of addr 1
+  lda #CN_SCR_OFFSET_END_L        ; load low byte of scr addr end
+  sta Z_ADDR_2_LOW                ; store in low byte of addr 2
+  lda Z_SCR_START_HIGH            ; get high byte of screen start
+  sta Z_ADDR_1_HIGH               ; store in high byte of addr 1
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_END_H        ; add page (high byte) offset to screen start
+  sta Z_ADDR_2_HIGH               ; store result in addr 2 high byte
+  txa                             ; X -> A, get char from X to A for fill mem routine
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
   rts
 
 
-; === copy_map_chars_to_screen
-;   map copy routine from stored memory location to screen, characters only, does not set any colour map data
+; === plot_fill_char_scr_half_1
+;   fill FIRST half of character screen with single character
 ; params:
-;   X - page where map starts, i.e. the high byte, assumes starts at zero starting offset
+;   A - colour to fill colour map with
 ; uses:
-;   A, X, Y
+;   A, X
+;   ADDR 1 H / L, ADDR 2 H / L
 ; side effects:
-;   A, X, Y have random value after this routine
-; returns:
-;   none
-copy_map_chars_to_screen
-  stx Z_ADDR_3_HIGH                     ; X -> Z_ADDR_3_HIGH, input for page where map data exists
-  lda #$04
-  sta Z_ADDR_1_HIGH                     ; put high part of address $0400 (screen chars) zero temp 1 addr
-  lda #$D8
-  lda #$00                              ; zero out low part of temp 1, 2, 3 and save to Y (for indirect mem access)
-  sta Z_ADDR_1_LOW
-  sta Z_ADDR_3_LOW
-  tay
-  lda #$03                              ; put page count for reaching end of screen block (1000 bytes) in temp 1 misc, low value E8 hardcoded below
-  sta Z_TEMP_1
-copy_mp2scr_loop
-  lda (Z_ADDR_3_LOW), Y                 ; load next character from memory
-  sta (Z_ADDR_1_LOW), Y                 ; store in character mem
-copy_mp2scr_next_pos
-  iny                                   ; increase Y offset, affects all pointers
-  cpy #$00
-  beq copy_mp2scr_next_page             ; check if byte wrapped around to #$00, if so add page
-  lda Z_TEMP_1                          ; load page counter to check if should check low byte amount
-  cmp #$00
-  bne copy_mp2scr_loop                  ; if didn't load zero then continue looping, only check low byte if no more pages left
-  cpy #$E8                              ; check Y offset pointer against last position
-  bne copy_mp2scr_loop                  ; if not equal, not finished yet, continue looping
-  jmp copy_mp2scr_finish                ; otherwise we're done, finish
-copy_mp2scr_next_page
-  inc Z_ADDR_1_HIGH                     ; increase page for all pointers
-  inc Z_ADDR_3_HIGH
-  dec Z_TEMP_1                          ; decrease page counter by 1
-  jmp copy_mp2scr_loop                  ; continue, end is not exactly on a page
-copy_mp2scr_finish
+;   fill_mem:   A, X, Y, ADDR 1 H / L, ADDR 2 H / L
+plot_fill_char_scr_half_1
+  tax                             ; A -> X, save char to fill screen until after addresses set
+  lda #CN_SCR_OFFSET_START        ; load low byte for scr addr start
+  sta Z_ADDR_1_LOW                ; store in low byte of addr 1
+  lda #CN_SCR_OFFSET_HALF_L       ; load low byte of scr addr half
+  sta Z_ADDR_2_LOW                ; store in low byte of addr 2
+  lda Z_SCR_START_HIGH            ; get high byte of col map mem start
+  sta Z_ADDR_1_HIGH               ; store in high byte of addr 1
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_HALF_H       ; add page (high byte) offset for half screen to col map mem
+  sta Z_ADDR_2_HIGH               ; store result in addr 2 high byte
+  txa                             ; X -> A, get char from X to A for fill mem routine
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
+  rts
+
+
+; === plot_fill_char_scr_half_2
+;   fill SECOND half of character screen with single character
+; params:
+;   A - colour to fill colour map with
+; uses:
+;   A, X
+;   ADDR 1 H / L, ADDR 2 H / L
+; side effects:
+;   fill_mem:   A, X, Y, ADDR 1 H / L, ADDR 2 H / L
+plot_fill_char_scr_half_2
+  tax                             ; A -> X, save char to fill screen until after addresses set
+  lda #CN_SCR_OFFSET_HALF_L       ; load low byte for scr addr half
+  sta Z_ADDR_1_LOW                ; store in low byte of addr 1
+  lda #CN_SCR_OFFSET_END_L        ; load low byte of scr addr end
+  sta Z_ADDR_2_LOW                ; store in low byte of addr 2
+  lda Z_SCR_START_HIGH            ; get high byte of col map mem start
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_HALF_H       ; add page (high byte) offset for half screen to col map mem
+  sta Z_ADDR_1_HIGH               ; store in high byte of addr 1
+  lda Z_SCR_START_HIGH            ; get high byte of col map mem start, again
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_END_H        ; add page (high byte) offset for end screen to col map mem
+  sta Z_ADDR_2_HIGH               ; store result in addr 2 high byte
+  txa                             ; X -> A, get char from X to A for fill mem routine
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
+  rts
+
+; === plot_fill_col_map
+;   fill entire colour map with single colour
+; params:
+;   A - colour to fill colour map with
+; uses:
+;   A, X
+;   ADDR 1 H / L, ADDR 2 H / L
+; side effects:
+;   fill_mem:   A, X, Y, ADDR 1 H / L, ADDR 2 H / L
+plot_fill_col_map
+  tax                             ; A -> X, save char to fill screen until after addresses set
+  lda #CN_SCR_OFFSET_START        ; load low byte for scr addr start
+  sta Z_ADDR_1_LOW                ; store in low byte of addr 1
+  lda #CN_SCR_OFFSET_END_L        ; load low byte of scr addr end
+  sta Z_ADDR_2_LOW                ; store in low byte of addr 2
+  lda Z_COL_START_HIGH            ; get high byte of col map mem start
+  sta Z_ADDR_1_HIGH               ; store in high byte of addr 1
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_END_H        ; add page (high byte) offset to col map mem
+  sta Z_ADDR_2_HIGH               ; store result in addr 2 high byte
+  txa                             ; X -> A, get char from X to A for fill mem routine
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
+  rts
+
+; === plot_fill_col_map_half_1
+;   fill FIRST half of colour map with single colour
+; params:
+;   A - colour to fill colour map with
+; uses:
+;   A, X
+;   ADDR 1 H / L, ADDR 2 H / L
+; side effects:
+;   fill_mem:   A, X, Y, ADDR 1 H / L, ADDR 2 H / L
+plot_fill_col_map_half_1
+  tax                             ; A -> X, save char to fill screen until after addresses set
+  lda #CN_SCR_OFFSET_START        ; load low byte for scr addr start
+  sta Z_ADDR_1_LOW                ; store in low byte of addr 1
+  lda #CN_SCR_OFFSET_HALF_L       ; load low byte of scr addr half
+  sta Z_ADDR_2_LOW                ; store in low byte of addr 2
+  lda Z_COL_START_HIGH            ; get high byte of col map mem start
+  sta Z_ADDR_1_HIGH               ; store in high byte of addr 1
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_HALF_H       ; add page (high byte) offset for half screen to col map mem
+  sta Z_ADDR_2_HIGH               ; store result in addr 2 high byte
+  txa                             ; X -> A, get char from X to A for fill mem routine
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
+  rts
+
+
+; === plot_fill_col_map_half_2
+;   fill SECOND half of colour map with single colour
+; params:
+;   A - colour to fill colour map with
+; uses:
+;   A, X
+;   ADDR 1 H / L, ADDR 2 H / L
+; side effects:
+;   fill_mem:   A, X, Y, ADDR 1 H / L, ADDR 2 H / L
+plot_fill_col_map_half_2
+  tax                             ; A -> X, save char to fill screen until after addresses set
+  lda #CN_SCR_OFFSET_HALF_L       ; load low byte for scr addr half
+  sta Z_ADDR_1_LOW                ; store in low byte of addr 1
+  lda #CN_SCR_OFFSET_END_L        ; load low byte of scr addr end
+  sta Z_ADDR_2_LOW                ; store in low byte of addr 2
+  lda Z_COL_START_HIGH            ; get high byte of col map mem start
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_HALF_H       ; add page (high byte) offset for half screen to col map mem
+  sta Z_ADDR_1_HIGH               ; store in high byte of addr 1
+  lda Z_COL_START_HIGH            ; get high byte of col map mem start, again
+  clc                             ; clear carry flag before addition
+  adc #CN_SCR_OFFSET_END_H        ; add page (high byte) offset for end screen to col map mem
+  sta Z_ADDR_2_HIGH               ; store result in addr 2 high byte
+  txa                             ; X -> A, get char from X to A for fill mem routine
+  jsr fill_mem                    ; call fill mem, A already set by caller of this routine
   rts
 
 
@@ -2124,33 +2108,6 @@ match_byte_from_list_found
 match_byte_from_list_finish
   ldx Z_BYTE_MATCH_LOW                  ; restore low and high byte addr to X, Y
   ldy Z_BYTE_MATCH_HIGH
-  rts
-
-
-; === save_registers
-;   save A, X, Y registers to zero page
-; side effects:
-;   uses Z_PSH_REG_A / X / Y as temp storage
-;   registers remain same as before this routine
-save_registers
-  sta Z_PSH_REG_A
-  stx Z_PSH_REG_X
-  sty Z_PSH_REG_Y
-  rts
-
-
-; === restore_registers
-;   restore A, X, Y registers from temp zero page storage
-; params:
-;   Z_PSH_REG_A / X / Y are a kind of input, should be previously saved with save_registers
-; side effects:
-;   none
-; return values:
-;   A, X, Y contain same values as pushed previously with save_registers
-restore_registers
-  lda Z_PSH_REG_A
-  ldx Z_PSH_REG_X
-  ldy Z_PSH_REG_Y
   rts
 
 
@@ -4200,18 +4157,6 @@ debug_label_end_of_draw_data    ; = $7db6 in this version.
                                 ;   that's 3510 bytes, recording 10 different screen halfs mirrored on both sizes,
                                 ;   meaning we're using about 1+1/3 pages per full screen, in terms of "compression"
 
-;==========================================================
-; MAPS
-;==========================================================
-
-* = $C000
-
-; colour map compressed copy, 1000 characters
-data_col_map_backup
-; "reserving" data, not really done but use for label
-
-
-;* = $C3E8
 
 ;==========================================================
 ; SPRITE DATA
@@ -4252,3 +4197,25 @@ sprite_pax_standing_pt3
 !byte $00,$00,$00,$00,$00,$00,$00,$00
 !byte $00,$00,$00,$00,$00,$00,$00,$00
 !byte $00,$00,$00,$00,$00,$00,$00,$01
+
+
+;==========================================================
+; MAPS
+;==========================================================
+
+* = $C000
+
+; colour map compressed copy, 1000 characters
+data_col_map_backup
+; "reserving" data, not really done but use for label
+;* = $C3E8
+
+* = $C400
+data_buffer_scr_chars
+; "reserving" data, not really done but use for label
+;* = $C7E8
+
+* = $C800
+data_buffer_col_map
+; "reserving" data, not really done but use for label
+;* = $CBE8
