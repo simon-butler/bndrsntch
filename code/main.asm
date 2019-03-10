@@ -338,11 +338,13 @@ first_pers_loop_update_player
   jsr plot_set_bank                     ; set bank for plot read to 2 (doesn't set screen), map data stored here  
   jsr determine_location_type           ; update player location type pointers to data table
   jsr update_player_look_ahead          ; update same for look ahead
-  lda #CN_VID_BANK_1                    ; load code for video bank 2
-  jsr plot_set_bank                     ; restore bank for plot read to 1
+  jsr plot_set_buffer                   ; set plot scr / col ptrs to buffer (draws offset screen for later copy)
 first_pers_draw_scr
   jsr draw_two_tone_bg                  ; draw two tone bg (stylistic basis)
   jsr draw_corridor                     ; draw detail of corridor at current position
+  lda #CN_VID_BANK_1                    ; load code for video bank 1
+  jsr plot_set_bank                     ; restore bank for plot read to 1
+  jsr plot_pull_scr_col_buffers         ; pull data from screen and colour buffers to current plot ptrs (actual scr bank 1, col map)
   jsr draw_fp_sprites                   ; draw first person sprites
 first_pers_loop_move
   jsr wait_for_key                      ; wait for a key from user
@@ -1810,23 +1812,23 @@ plot_set_bank
   beq plot_set_bank_2
   cmp #CN_VID_BANK_3            ; check if bank 3
   beq plot_set_bank_3
-plot_set_bank_0                ; otherwise continue to set for bank 0
+plot_set_bank_0                 ; otherwise continue to set for bank 0
   lda #CN_BK0_SCR_START_HIGH
   sta Z_SCR_START_HIGH
   jmp plot_set_bank_finish
-plot_set_bank_1                ; set for bank 1
+plot_set_bank_1                 ; set for bank 1
   lda #CN_BK1_SCR_START_HIGH
   sta Z_SCR_START_HIGH
   jmp plot_set_bank_finish
-plot_set_bank_2                ; set for bank 2
+plot_set_bank_2                 ; set for bank 2
   lda #CN_BK2_SCR_START_HIGH
   sta Z_SCR_START_HIGH
   jmp plot_set_bank_finish
-plot_set_bank_3                ; set for bank 3
+plot_set_bank_3                 ; set for bank 3
   lda #CN_BK3_SCR_START_HIGH
   sta Z_SCR_START_HIGH
 plot_set_bank_finish
-  lda #CN_COL_MEM_START_HIGH
+  lda #CN_COL_MEM_START_HIGH    ; set col mem to real col mem
   sta Z_COL_START_HIGH
   rts
 
@@ -1876,6 +1878,7 @@ set_last_xy_complex_add_finish_a
 set_last_xy_return
   rts
 
+; TODO !!! : untested and unused
 ; === plot_inc_x_line_wrap
 ;   increase plot x position only, fast method for this common need,
 ;   does not increase Y position, wraps back to left side if was at end.
@@ -1910,6 +1913,38 @@ plot_inc_x_add_to_bytes
   inc Z_SCR_HI_BYTE                     ; otherwise increase page of screen
   inc Z_COL_HI_BYTE                     ;   and of col map
 plot_inc_x_finish
+  rts
+
+
+; === plot_pull_scr_col_buffers
+; copy data from screen and colour buffers to plot ptr screen and col
+plot_pull_scr_col_buffers
+  lda #CN_SCR_OFFSET_START          ; get low byte of screen data start
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  sta Z_ADDR_3_LOW                  ; store in addr 2 low byte
+  lda #CN_SCR_OFFSET_END_L          ; get low byte of screen mem type end
+  sta Z_ADDR_2_LOW                  ; store in addr 2 low byte
+  lda Z_SCR_START_HIGH              ; get high byte of screen start (to write to)
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  clc                               ; clear carry flag
+  adc #CN_SCR_OFFSET_END_H          ; add end offset of screen mem type size
+  sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
+  lda #>data_buffer_scr_chars       ; get high byte of screen chars buffer
+  sta Z_ADDR_3_HIGH                 ; store in addr 3 high byte
+  jsr copy_mem                      ; copy col mem to storage mem
+  lda #CN_SCR_OFFSET_START          ; get low byte of screen data start
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  sta Z_ADDR_3_LOW                  ; store in addr 2 low byte
+  lda #CN_SCR_OFFSET_END_L          ; get low byte of screen mem type end
+  sta Z_ADDR_2_LOW                  ; store in addr 2 low byte
+  lda Z_COL_START_HIGH              ; get high byte of col map start (to write to)
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  clc                               ; clear carry flag
+  adc #CN_SCR_OFFSET_END_H          ; add end offset of screen mem type size
+  sta Z_ADDR_2_HIGH                 ; store in addr 2 high byte
+  lda #>data_buffer_col_map         ; get high byte of col map buffer
+  sta Z_ADDR_3_HIGH                 ; store in addr 3 high byte
+  jsr copy_mem                      ; copy col mem to storage mem
   rts
 
 
