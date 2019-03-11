@@ -45,7 +45,9 @@
 CN_CONFIG_PAL                 = $32   ; 50 frames a second
 CN_CONFIG_NTSC                = $3C   ; 60 frames a second
 
-CONFIG_FRAMES              = CN_CONFIG_PAL   ; IMPORTANT! SET THIS TO THE RIGHT REGION BEFORE BUILDING!
+CONFIG_FRAMES                 = CN_CONFIG_PAL   ; IMPORTANT! SET THIS TO THE RIGHT REGION BEFORE BUILDING!
+
+CONFIG_MASTER_VOL             = $0F   ; max volume of 15
 
 
 ;==========================================================
@@ -90,6 +92,44 @@ VIC_SPRITE_POS_REGS     = $D000
 VIC_SPRITE_MSB_REG      = $D010
 VIC_SPRITE_EXP_HORZ     = $D01D     ; horizontal expand register
 VIC_SPRITE_EXP_VERT     = $D017     ; horizontal expand register
+
+
+;==========================================================
+; SID MEM REGISTERS
+;==========================================================
+
+SID_V1_FREQ_L           = $D400
+SID_V1_FREQ_H           = $D401
+SID_V1_PULSE_L          = $D402
+SID_V1_PULSE_H          = $D403     ; bits 0 - 3 only used (least nibble)
+SID_V1_CTRL_REG         = $D404     ; check bit is a flag, see above
+SID_V1_ADSR_1           = $D405     ; ADSR envelope settings 1
+SID_V1_ADSR_2           = $D406     ; ADSR envelope settings 1
+
+SID_V2_FREQ_L           = $D407
+SID_V2_FREQ_H           = $D408
+SID_V2_PULSE_L          = $D409
+SID_V2_PULSE_H          = $D40A     ; bits 0 - 3 only used (least nibble)
+SID_V2_CTRL_REG         = $D40B     ; check bit is a flag, see above
+SID_V2_ADSR_1           = $D40C     ; ADSR envelope settings 1
+SID_V2_ADSR_2           = $D40D     ; ADSR envelope settings 1
+
+SID_V3_FREQ_L           = $D40E
+SID_V3_FREQ_H           = $D40F
+SID_V3_PULSE_L          = $D410
+SID_V3_PULSE_H          = $D411     ; bits 0 - 3 only used (least nibble)
+SID_V3_CTRL_REG         = $D412     ; check bit is a flag, see above
+SID_V3_ADSR_1           = $D413     ; ADSR envelope settings 1
+SID_V3_ADSR_2           = $D414     ; ADSR envelope settings 1
+
+SID_FLT_CUT_L           = $D415     ; filter cut-off low byte
+SID_FLT_CUT_H           = $D416     ; filter cut-off high byte
+SID_FLT_RES_CTRL        = $D417     ; filter resonance control
+SID_FLT_MODE_AND_VOL    = $D418     ; filter mode (bits 7 - 4) and master volume control (bits 3 - 0)
+
+SID_OSC_3_RND           = $D41B     ; oscillator 3 random number generator
+SID_ADSR_3_OUT          = $D41C     ; ADSR enveloper generator 3 output
+
 
 ;==========================================================
 ; PRE-PROCESSED CONSTANTS
@@ -182,8 +222,8 @@ SP_POS_PAX_FAR_Y        = $84
 SP_POS_PAX_NEAR_X       = $A0
 SP_POS_PAX_NEAR_Y       = $74
 
-GM_PAX_LOC_X            = $0A
-GM_PAX_LOC_Y            = $14
+GM_PAX_LOC_X            = $02
+GM_PAX_LOC_Y            = $0E
 
 ACTOR_KEY_PAX           = $01
 
@@ -280,8 +320,7 @@ Z_TABLE_START           = $80           ; not yet used, but possible idea
 start_game
   jsr init_helper_vars                  ; some initial set up so some routines work correctly
   jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
-  jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
-  ;jsr wait_for_key
+  ;jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
 start_init_player_data
   lda #$07                              ; player X pos = 07
   sta Z_PLYR_POS_X
@@ -350,7 +389,8 @@ map_loop_move
   jsr move_player_in_dir                ; try to move player in direction specified
   cmp #$FF                              ; check if move failed
   beq map_loop_show_plyr_on_map         ; move did fail, redraw current position as latest position
-  jmp map_loop_update_player            ; otherwise update from new move position, new draw and pass to main loop
+  jsr sound_action_blip                ; otherwise, play sound indicating movement
+  jmp map_loop_update_player            ; then update from new move position, new draw and pass to main loop
 map_goto_first_person
   jsr save_map_highlights               ; first save map highlights (colours)
   lda #$02                              ; change mode variable to $02 for first person
@@ -396,7 +436,8 @@ first_pers_loop_move
   jsr move_player_in_dir                ; try to move player in direction specified
   cmp #$FF                              ; check if move failed
   beq first_pers_loop_move_fail         ; move did fail, TODO show message to user, cannot go that way
-  jsr update_stored_map_highlights      ; otherwise moved successfully, update map highlights for map mode coherence
+  jsr sound_action_blip                ; otherwise, play sound indicating movement
+  jsr update_stored_map_highlights      ; then update map highlights for map mode coherence
 first_pers_loop_move_fail
   jmp first_pers_loop_update_player     ; otherwise update from new move position, new draw and pass to main loop
 first_pers_act_pax
@@ -431,8 +472,26 @@ choice_pax_start
   jsr draw_face_pax                     ; draw Pax face on screen
   jsr cutscene_choice_text_pax          ; then do choice text cutscene for Pax (includes 5 seconds of delays for dramatic effect)
   jsr choice_text_show_pax              ; go to choice text display and handler, returns choice after timer expires
+  cmp #02                               ; check if choice is 2nd choice
+  beq choice_pax_bad                    ; if so go to bad choice
+  jsr sound_pax_choice_good             ; otherwise, good choice, play good choice music
+  jsr draw_face_pax                     ; draw Pax face on screen, again
+  lda #CN_COL_VAL_BLUE                  ; load blue colour for border
+  sta VIC_BORDER_COL                    ; set to border
+  lda #CN_COL_VAL_L_GREEN               ; load light green colour for border bars
+  jmp choice_pax_post                   ; continue to after choice processing
+choice_pax_bad
+  jsr sound_pax_choice_bad              ; play bad choice music
+  jsr draw_face_pax                     ; draw Pax face on screen, again
+  lda #CN_COL_VAL_RED                   ; load red colour for border
+  sta VIC_BORDER_COL                    ; set to border
+  lda #CN_COL_VAL_BLACK                 ; load black colour for border bars
+choice_pax_post
+  ldx #$0A                              ; 10 second wait
+  ldy #$00                              ;   and no extra frames
+  jsr wait_sec_blocking_border_scroll_bar   ; special effect, wait with border scroll bar (flashing effect in border, used in loaders)
   sta VIC_BORDER_COL                    ; debug: show result ($01 or $02) in border colour
-  jmp *                                 ; TODO - process Pax choice
+  jmp start_game                        ; restart game
 ;---------------------------------------
 info_entry
   jmp *                                 ; TODO - info mode not yet made
@@ -674,7 +733,7 @@ mv_plyr_in_dir_facing_read
   lda Z_PLYR_FACING                 ; put updated / current player facing direction in A, is indication of success on return
   jmp mv_plyr_in_dir_finish
 mv_plyr_in_dir_failed
-  lda Z_TEMP_1
+  lda #$FF
 mv_plyr_in_dir_finish
   rts
 
@@ -1170,6 +1229,7 @@ draw_pax_far
   ldx #SP_POS_PAX_FAR_X
   ldy #SP_POS_PAX_FAR_Y
   jsr draw_sprite_pax
+  jsr sound_approaching_pax     ; also play sound for approaching Pax
   rts
 
 ; === draw_pax_near
@@ -1183,6 +1243,7 @@ draw_pax_near
   ldx #SP_POS_PAX_NEAR_X
   ldy #SP_POS_PAX_NEAR_Y
   jsr draw_sprite_pax
+  jsr sound_at_pax              ; also play sound when at Pax
   rts
 
 ; === draw_sprite_pax
@@ -1312,9 +1373,10 @@ draw_face_pax
 
 ; === cutscene_choice_text_pax
 cutscene_choice_text_pax
+  jsr sound_pax_meet              ; first play Pax choice melody
   ; Pax line 1
-  ldx #$02                          ; wait for 2 seconds
-  ldy #$00                          ;   with no extra frames
+  ;ldx #$02                          ; wait for 2 seconds
+  ;ldy #$00                          ;   with no extra frames
   jsr wait_sec_blocking             ; do waiting
   lda #$00                          ; set y to top line
   sta Z_SCR_Y                       ; store in plot y
@@ -1355,12 +1417,6 @@ cutscene_choice_text_pax
 ; returns:
 ;   A - choice number, $01 for first choice (default if no input) or $02 for second choice
 choice_text_show_pax
-  lda #CN_COL_VAL_WHITE               ; load colour white in A
-  ldy #$18                            ; load $18 (24), last y line, Y
-  jsr choice_col_text_line            ; fill the bottom line to indicate choice coming now
-  ldx #$02                            ; use 2 second delay
-  ldy #$00                            ;   with no additional frames
-  jsr wait_sec_blocking               ; do wait
   lda #CN_COL_VAL_BLACK               ; load colour black in A
   ldy #$17                            ; load $17 (23), second last y line, Y
   jsr choice_col_text_line            ; clear second last y line of text to colour black
@@ -1431,13 +1487,15 @@ choice_txt_sh_pax_left
   pla                                 ; pull existing choice value from stack
   cmp #$01                            ; check if already equals left
   beq choice_txt_sh_pax_cont          ; if so don't process, nothing to do, continue with loop
-  lda #$01                            ; otherwise load A with choice 1 signified $01
+  jsr sound_action_blip               ; otherwise play action sound
+  lda #$01                            ; and load A with choice 1 signified $01
   jmp choice_txt_sh_pax_redraw        ; then redraw with new choice selection
 choice_txt_sh_pax_right
   pla                                 ; pull existing choice value from stack
   cmp #$02                            ; check if already equals right
   beq choice_txt_sh_pax_cont          ; if so don't process, nothing to do, continue with loop
-  lda #$02                            ; otherwise load A with choice 1 signified $01
+  jsr sound_action_blip               ; otherwise play action sound
+  lda #$02                            ; and load A with choice 1 signified $01
   jmp choice_txt_sh_pax_redraw        ; then redraw with new choice selection
 choice_txt_sh_pax_fin
   ; TODO : disable timer! is still running forever
@@ -1612,6 +1670,382 @@ choice_col_text_line_loop
   cpy #$28                            ; check if reached end of line
   bne choice_col_text_line_loop       ; if not, loop
   rts                                 ; otherwise done
+
+
+;==========================================================
+; ROUTINES - SOUND
+;==========================================================
+
+; these routines are blocking for now, will do IRQ based sound and music eventually
+
+; === sound_clear_sid
+;   clear all registers in SID chip, used in preparation for new sounds
+; params:
+;   none
+; uses:
+;   A, Y
+;   Z_ADDR_1
+; side effects:
+;   24 SID chip register addresses zeroed
+; returns:
+;   none
+sound_clear_sid
+  lda #$00              ; load low byte of SID chip start
+  sta Z_ADDR_1_LOW      ; store in addr 1 low byte
+  lda #$D4              ; load high byte of SID chip start
+  sta Z_ADDR_1_HIGH     ; store in addr 1 high byte
+  ldy #$00              ; zero Y for indirect addressing, and counter
+  lda #$00              ; zero A, value to write SID registers
+snd_clr_sid_loop
+  sta (Z_ADDR_1_LOW), Y ; write zero value to SID reg at Z_ADDR_1 + Y
+  iny                   ; Y++
+  cpy #$25              ; check for end of SID chip addresses + 1
+  bne snd_clr_sid_loop  ; if not finished, loop
+  rts                   ; otherwise finish
+
+
+; === sound_action_blip
+;   plays the sound for when the player does an action
+; notes:
+;   uses SID voice 1
+; params:
+;   none
+; uses:
+;   A, X, Y
+; side effects:
+;   changes contents of SID chip, voice 1 and master vol
+;   wait_sec_blocking:    A, X, Y
+; returns:
+;   none
+sound_action_blip
+  jsr sound_clear_sid
+  lda #CONFIG_MASTER_VOL      ; load master volume setting from hard coded config
+  sta SID_FLT_MODE_AND_VOL    ; store in SID volume register
+  ; voice settings
+  lda #$08                    ; set MSB in 12 bit number, i.e. to value 2048
+  sta SID_V1_PULSE_H          ; write only to high byte, low byte already clear
+  lda #$10                    ; ADSR, sustain = 1 (high nibble), release = 0 (low nibble)
+  sta SID_V1_ADSR_2           ; set SID voice 1 ADSR reg 2
+  ; freq
+  lda #$00                    ; load low byte of dec 8192 Hz freq (quite high, just above 8th octave)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$20                    ; load high byte of dec 8192 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  ; sound start
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$10                    ;   and 16 frames only
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  rts
+
+
+; === sound_approaching_pax
+;   plays the sound to play when approaching Pax
+; notes:
+;   uses SID voice 1
+; params:
+;   none
+; uses:
+;   A, X, Y
+;   Z_TEMP_1
+; side effects:
+;   changes contents of SID chip, voice 1 and master vol
+;   wait_sec_blocking:    A, X, Y
+; returns:
+;   none
+sound_approaching_pax
+  jsr sound_clear_sid
+  lda #CONFIG_MASTER_VOL      ; load master volume setting from hard coded config
+  sta SID_FLT_MODE_AND_VOL    ; store in SID volume register
+  ; voice settings
+  lda #$08                    ; set MSB in 12 bit number, i.e. to value 2048
+  sta SID_V1_PULSE_H          ; write only to high byte, low byte already clear
+  lda #$01                    ; ADSR, attack = 0 (high nibble), decay = 1 (low nibble)
+  sta SID_V1_ADSR_1           ; set SID voice 1 ADSR reg 2
+  lda #$20                    ; ADSR, sustain = 2 (high nibble), release = 0 (low nibble)
+  sta SID_V1_ADSR_2           ; set SID voice 1 ADSR reg 2
+  ; freq
+  lda #$5A                    ; load low byte of dec 4186 Hz freq (note C8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$10                    ; load high byte of dec 4186 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  ; set up loop
+  lda #$06                    ; X = 6, to do loop of 5 notes (+ 1 for decrease offset)
+  sta Z_TEMP_1                ; store counter in temp 1
+sound_appr_pax_loop
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$14                    ;   and 20 frames only
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$14                    ;   and 20 frames only
+  jsr wait_sec_blocking       ; do wait
+  dec Z_TEMP_1                ; decrease counter
+  lda Z_TEMP_1                ; load counter value
+  bne sound_appr_pax_loop     ; if not zero, continue
+  rts                         ; otherwise finished, no clean up needed
+
+
+; === sound_at_pax
+;   plays the sound to play when at (in same location as) Pax
+; notes:
+;   uses SID voice 1
+; params:
+;   none
+; uses:
+;   A, X, Y
+;   Z_TEMP_1
+; side effects:
+;   changes contents of SID chip, voice 1 and master vol
+;   wait_sec_blocking:    A, X, Y
+; returns:
+;   none
+sound_at_pax
+  jsr sound_clear_sid
+  lda #CONFIG_MASTER_VOL      ; load master volume setting from hard coded config
+  sta SID_FLT_MODE_AND_VOL    ; store in SID volume register
+  ; voice settings
+  lda #$08                    ; set MSB in 12 bit number, i.e. to value 2048
+  sta SID_V1_PULSE_H          ; write only to high byte, low byte already clear
+  lda #$01                    ; ADSR, attack = 0 (high nibble), decay = 1 (low nibble)
+  sta SID_V1_ADSR_1           ; set SID voice 1 ADSR reg 2
+  lda #$20                    ; ADSR, sustain = 2 (high nibble), release = 0 (low nibble)
+  sta SID_V1_ADSR_2           ; set SID voice 1 ADSR reg 2
+  ; super low note, more like rumbling fx
+  lda #$DC                    ; load low byte of dec 220 Hz freq
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$00                    ; load high byte of dec 220 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$01                    ; 1 second...
+  ldy #$00                    ;   and 0 frames
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ; freq for multiple notes
+  lda #$5A                    ; load low byte of dec 4186 Hz freq (note C8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$10                    ; load high byte of dec 4186 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  ; set up loop
+  lda #$04                    ; X = 4, to do loop of 3 notes (+ 1 for decrease offset)
+  sta Z_TEMP_1                ; store counter in temp 1
+sound_at_pax_loop
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$14                    ;   and 20 frames only
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$14                    ;   and 20 frames only
+  jsr wait_sec_blocking       ; do wait
+  dec Z_TEMP_1                ; decrease counter
+  lda Z_TEMP_1                ; load counter value
+  bne sound_at_pax_loop       ; if not zero, continue
+  rts                         ; otherwise finished, no clean up needed
+
+
+; === sound_pax_meet
+;   plays the sound to play when you meet Pax
+; notes:
+;   uses SID voice 1
+; params:
+;   none
+; uses:
+;   A, X, Y
+;   Z_TEMP_1
+; side effects:
+;   changes contents of SID chip, voice 1 and master vol
+;   wait_sec_blocking:    A, X, Y
+; returns:
+;   none
+sound_pax_meet
+  jsr sound_clear_sid
+  lda #CONFIG_MASTER_VOL      ; load master volume setting from hard coded config
+  sta SID_FLT_MODE_AND_VOL    ; store in SID volume register
+  ; voice settings
+  lda #$08                    ; set MSB in 12 bit number, i.e. to value 2048
+  sta SID_V1_PULSE_H          ; write only to high byte, low byte already clear
+  lda #$01                    ; ADSR, attack = 0 (high nibble), decay = 1 (low nibble)
+  sta SID_V1_ADSR_1           ; set SID voice 1 ADSR reg 2
+  lda #$20                    ; ADSR, sustain = 2 (high nibble), release = 0 (low nibble)
+  sta SID_V1_ADSR_2           ; set SID voice 1 ADSR reg 2
+  ; note 1 of 3, D8
+  lda #$5B                    ; load low byte of dec 4699 Hz freq (note D8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$12                    ; load high byte of dec 4699 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ; note 2 of 3, D#8
+  lda #$72                    ; load low byte of dec 4978 Hz freq (note D#8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$13                    ; load high byte of dec 4978 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ; note 3 of 3, E8
+  lda #$9A                    ; load low byte of dec 5274 Hz freq (note E8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$14                    ; load high byte of dec 5274 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  rts                         ; otherwise finished, no clean up needed
+
+
+; === sound_pax_choice_bad
+;   plays the sound to play when Pax you pick the bad Pax choice
+;G,D#,F#
+; notes:
+;   uses SID voice 1
+; params:
+;   none
+; uses:
+;   A, X, Y
+;   Z_TEMP_1
+; side effects:
+;   changes contents of SID chip, voice 1 and master vol
+;   wait_sec_blocking:    A, X, Y
+; returns:
+;   none
+sound_pax_choice_bad
+  jsr sound_clear_sid
+  lda #CONFIG_MASTER_VOL      ; load master volume setting from hard coded config
+  sta SID_FLT_MODE_AND_VOL    ; store in SID volume register
+  ; voice settings
+  lda #$08                    ; set MSB in 12 bit number, i.e. to value 2048
+  sta SID_V1_PULSE_H          ; write only to high byte, low byte already clear
+  lda #$01                    ; ADSR, attack = 0 (high nibble), decay = 1 (low nibble)
+  sta SID_V1_ADSR_1           ; set SID voice 1 ADSR reg 2
+  lda #$20                    ; ADSR, sustain = 2 (high nibble), release = 0 (low nibble)
+  sta SID_V1_ADSR_2           ; set SID voice 1 ADSR reg 2
+  ; note 1 of 3, G8
+  lda #$80                    ; load low byte of dec 6272 Hz freq (note F8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$18                    ; load high byte of dec 6272 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ; note 2 of 3, D#8
+  lda #$72                    ; load low byte of dec 4978 Hz freq (note D#8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$13                    ; load high byte of dec 4978 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ; note 3 of 3, F#8
+  lda #$20                    ; load low byte of dec 5920 Hz freq (note F#8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$17                    ; load high byte of dec 5920 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  rts                         ; otherwise finished, no clean up needed
+
+
+; === sound_pax_choice_good
+;   plays the sound to play when Pax you pick the bad Pax choice
+;E,F#,D#
+; notes:
+;   uses SID voice 1
+; params:
+;   none
+; uses:
+;   A, X, Y
+;   Z_TEMP_1
+; side effects:
+;   changes contents of SID chip, voice 1 and master vol
+;   wait_sec_blocking:    A, X, Y
+; returns:
+;   none
+sound_pax_choice_good
+  jsr sound_clear_sid
+  lda #CONFIG_MASTER_VOL      ; load master volume setting from hard coded config
+  sta SID_FLT_MODE_AND_VOL    ; store in SID volume register
+  ; voice settings
+  lda #$08                    ; set MSB in 12 bit number, i.e. to value 2048
+  sta SID_V1_PULSE_H          ; write only to high byte, low byte already clear
+  lda #$01                    ; ADSR, attack = 0 (high nibble), decay = 1 (low nibble)
+  sta SID_V1_ADSR_1           ; set SID voice 1 ADSR reg 2
+  lda #$20                    ; ADSR, sustain = 2 (high nibble), release = 0 (low nibble)
+  sta SID_V1_ADSR_2           ; set SID voice 1 ADSR reg 2
+  ; note 1 of 3, E8
+  lda #$9A                    ; load low byte of dec 5274 Hz freq (note E8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$14                    ; load high byte of dec 5274 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ; note 2 of 3, F#8
+  lda #$20                    ; load low byte of dec 5920 Hz freq (note F#8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$17                    ; load high byte of dec 5920 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ; note 3 of 3, D#8
+  lda #$72                    ; load low byte of dec 4978 Hz freq (note D#8)
+  sta SID_V1_FREQ_L           ; save in SID voice 1 freq low byte
+  lda #$13                    ; load high byte of dec 4978 Hz freq
+  sta SID_V1_FREQ_H           ; save in SID voice 1 freq high byte
+  lda #$41                    ; bit 6 on, select pulse waveform, and bit 0 on, gate bit on, sound will start
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  ldx #$00                    ; 0 seconds...
+  ldy #$92                    ;   and 146 frames only (something is wrong here, will fix later)
+  jsr wait_sec_blocking       ; do wait
+  lda #$40                    ; bit 6 on only, select pulse waveform, clear bit 0 on, gate bit of, sound will stop
+  sta SID_V1_CTRL_REG         ; store setting in SID voice 1 control register
+  rts                         ; otherwise finished, no clean up needed
 
 
 ;==========================================================
