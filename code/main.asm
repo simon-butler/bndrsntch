@@ -330,6 +330,11 @@ map_loop_update_player
 map_loop_show_plyr_on_map
   jsr draw_std_player_on_map            ; draw player on map in standard colours
   jsr write_player_facing_str           ; write "FACING XXXX" on map, where "XXXX" is direction (north, east, etc)
+  jsr check_actor_collide               ; check if player collides or can see an actor
+  cpy #$00                              ; check if Y == 0 (actor in look ahead loc)
+  bne map_goto_first_person             ; if non zero then can see an actor, force go to first person
+  cpx #$00                              ; check if X == 0 (actor in same loc as player)
+  bne map_goto_first_person             ; if non zero then in same loc as an actor, force go to first person
 map_loop_move
   jsr wait_for_key                      ; wait for a key from user
   cmp #CN_ASCII_M                       ; check if char is 'M', to switch modes
@@ -372,8 +377,9 @@ first_pers_draw_scr
   lda #CN_VID_BANK_1                    ; load code for video bank 1
   jsr plot_set_bank                     ; restore bank for plot read to 1
   jsr plot_pull_scr_col_buffers         ; pull data from screen and colour buffers to current plot ptrs (actual scr bank 1, col map)
-  jsr draw_fp_sprites                   ; draw first person sprites, returns actor key if occupy same loc as actor
-  cmp #ACTOR_KEY_PAX                    ; check if occupies same loc as Pax
+  jsr check_actor_collide               ; check if player collides or can see an actor
+  jsr draw_fp_sprites                   ; draw sprites based on output of check_actor_collide
+  cpx #ACTOR_KEY_PAX                    ; check if occupies same loc as Pax
   beq first_pers_act_pax                ; if so, process Pax event
 first_pers_loop_move
   jsr wait_for_key                      ; wait for a key from user
@@ -670,6 +676,42 @@ mv_plyr_in_dir_facing_read
 mv_plyr_in_dir_failed
   lda Z_TEMP_1
 mv_plyr_in_dir_finish
+  rts
+
+
+; === check_actor_collide
+;   check with collision with actor. also includes look ahead
+; notes:
+;   actor keys:
+;     $01 - Pax
+; params:
+;   none
+; uses:
+;   A, X, Y
+; side effects:
+;   none
+; returns:
+;   X - actor key of actor if occupies same sapce, or $00 if none (see notes)
+;   Y - actor key of actor if can see actor in look ahead position
+check_actor_collide
+  ldx #$00                        ; X = 0, default return value
+  ldy #$00                        ; Y = 0, default return value
+  lda Z_PLYR_LOOK_AHEAD_X         ; first check if look ahead x matches Pax location x
+  cmp #GM_PAX_LOC_X
+  bne chk_act_collide_chk2        ; if not jump to check 2
+  lda Z_PLYR_LOOK_AHEAD_Y         ; check if look ahead y matches Pax location y
+  cmp #GM_PAX_LOC_Y
+  bne chk_act_collide_chk2        ; if not jump to check 2
+  ldy #ACTOR_KEY_PAX              ; otherwise set Y to actor key for Pax, and continue to near check
+chk_act_collide_chk2
+  lda Z_PLYR_POS_X                ; first check if player pos x matches Pax location x
+  cmp #GM_PAX_LOC_X
+  bne chk_act_collide_fin         ; if not jump to turn off sprites
+  lda Z_PLYR_POS_Y                ; check if player pos y matches Pax location y
+  cmp #GM_PAX_LOC_Y
+  bne chk_act_collide_fin         ; if not jump to turn off sprites
+  ldx #ACTOR_KEY_PAX              ; otherwise set X to actor key for Pax, and continue to end
+chk_act_collide_fin
   rts
 
 
@@ -1075,12 +1117,14 @@ draw_from_tab_finish
 ; === draw_fp_sprites
 ;   draw first person sprites. rough draft of system to use, has Pax only right now
 ; notes:
+;   takes input directly from check_actor_collide
 ;   actor keys:
 ;     $01 - Pax
 ; params:
-;   none
+;   X - actor key of actor if occupies same sapce, or $00 if none (see notes)
+;   Y - actor key of actor if can see actor in look ahead position
 ; uses:
-;   A
+;   A, X, Y
 ; side effects:
 ;   draw_pax_near:        A, X, Y
 ;   draw_pax_far:         A, X, Y
@@ -1090,33 +1134,28 @@ draw_from_tab_finish
 ; returns:
 ;   A - actor key of actor if occupies same sapce, or $00 if none (see notes)
 draw_fp_sprites
-  lda Z_PLYR_LOOK_AHEAD_X         ; first check if look ahead x matches Pax location x
-  cmp #GM_PAX_LOC_X
-  bne draw_fp_sprites_chk2        ; if not jump to check 2
-  lda Z_PLYR_LOOK_AHEAD_Y         ; check if look ahead y matches Pax location y
-  cmp #GM_PAX_LOC_Y
+  txa                             ; X -> A
+  pha                             ; push A (X) to stack
+  tya                             ; Y -> A
+  pha                             ; push A (Y)
+  cpy #ACTOR_KEY_PAX
   bne draw_fp_sprites_chk2        ; if not jump to check 2
   jsr draw_pax_far                ; otherwise there's a match, draw pax far away (in look ahead position)
-  jmp draw_fp_sprites_fin_none    ; then finish
+  jmp draw_fp_sprites_fin    ; then finish
 draw_fp_sprites_chk2
-  lda Z_PLYR_POS_X                ; first check if player pos x matches Pax location x
-  cmp #GM_PAX_LOC_X
-  bne draw_fp_sprites_none        ; if not jump to turn off sprites
-  lda Z_PLYR_POS_Y                ; check if player pos y matches Pax location y
-  cmp #GM_PAX_LOC_Y
+  cpx #ACTOR_KEY_PAX
   bne draw_fp_sprites_none        ; if not jump to turn off sprites
   jsr draw_pax_near               ; otherwise there's a match, draw pax near (on this location, next action should be Pax talks)
-  jmp draw_fp_sprites_fin_act1    ; then finish and also return actor key for Pax
+  jmp draw_fp_sprites_fin    ; then finish and also return actor key for Pax
 draw_fp_sprites_none
   jsr wait_for_end_raster         ; wait until raster scan lines reach end of screen, to avoid visual tear
   lda #$00                        ; A = 0
   sta VIC_SPRITE_ENABLE           ; turn all sprites off
-  jmp draw_fp_sprites_fin_none
-draw_fp_sprites_fin_act1
-  lda #ACTOR_KEY_PAX              ; set A to return value of actor key for Pax
-  rts
-draw_fp_sprites_fin_none
-  lda #$00                        ; null actor key for return value
+draw_fp_sprites_fin
+  pla                             ; pull initial value of Y from stack to A
+  tay                             ; A -> Y
+  pla                             ; pull initial value of X from stack to A
+  tax                             ; A -> X
   rts
 
 
