@@ -321,6 +321,7 @@ start_game
   jsr init_helper_vars                  ; some initial set up so some routines work correctly
   jsr enable_video_bank_selection       ; enable video bank selection, only needs to be done once
   ;jsr post_loading_effect               ; show loading effect on glyph from "loading" screen
+  jsr do_intro_scr                      ; show intro screen
 start_init_player_data
   lda #$07                              ; player X pos = 07
   sta Z_PLYR_POS_X
@@ -2049,8 +2050,91 @@ sound_pax_choice_good
 
 
 ;==========================================================
-; ROUTINES - SPECIAL EFFECTS
+; ROUTINES - SPECIAL EFFECTS AND INFO
 ;==========================================================
+
+
+; === do_intro_scr
+;   handle everything for intro screen
+; assumptions:
+;   none
+do_intro_scr
+  lda #CN_CHAR_SPACE                ; get space character
+  jsr plot_fill_char_scr            ; fill whole screen with space (clear screen)
+  jsr draw_intro_scr                ; draw text for intro
+  jsr wait_for_key                  ; wait for key press to exit doing intro
+  rts
+
+
+; === draw_intro_scr
+;   draws text for intro screen
+; assumptions:
+;   none
+draw_intro_scr
+  ; line 1 / 7
+  lda #$00                          ; set y to top line
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_intro1             ; get low byte of intro line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_intro1             ; get high byte of intro line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  ; line 2 / 7
+  lda #$04                          ; set y
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_intro2             ; get low byte of intro line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_intro2             ; get high byte of intro line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  ; line 3 / 7
+  lda #$06                          ; set y
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_intro3             ; get low byte of intro line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_intro3             ; get high byte of intro line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  ; line 4 / 7
+  lda #$08                          ; set y
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_intro4             ; get low byte of intro line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_intro4             ; get high byte of intro line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  ; line 5 / 7
+  lda #$0E                          ; set y
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_intro5             ; get low byte of intro line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_intro5             ; get high byte of intro line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  ; line 1 / 7
+  lda #$10                          ; set y
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_intro6             ; get low byte of intro line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_intro6             ; get high byte of intro line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  ; line 1 / 7
+  lda #$18                          ; set y
+  sta Z_SCR_Y                       ; store in plot y
+  lda #<data_str_intro7             ; get low byte of intro line 1 string
+  sta Z_ADDR_1_LOW                  ; store in addr 1 low byte
+  lda #>data_str_intro7             ; get high byte of intro line 1 string
+  sta Z_ADDR_1_HIGH                 ; store in addr 1 high byte
+  ldx #CN_COL_VAL_WHITE             ; set col value to white, in X
+  jsr draw_chars_list_centered      ; draw first line on screen
+  rts
 
 ; === post_loading_effect
 ;   series of effects to apply to screen after loading
@@ -4623,6 +4707,30 @@ data_str_pg1_pax_choice2_un
 data_str_pg1_pax_choice2_sel
 !byte $0D
 !scr  "[worship pax]"
+
+; intro screen
+
+data_str_intro1
+!byte $11
+!scr  "b n d r s n t c h"
+data_str_intro2
+!byte $21
+!scr  "you are an agent finding your way"
+data_str_intro3
+!byte $23
+!scr  "in a maze, trying to find the truth"
+data_str_intro4
+!byte $11
+!scr  "of your existence" 
+data_str_intro5
+!byte $19
+!scr  "movement keys: w, a, s, d" 
+data_str_intro6
+!byte $25
+!scr  "press m to toggle map or first person"
+data_str_intro7
+!byte $26
+!scr  "press any key to start your journey..." 
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
 debug_label_end_of_tables_strings   ; = $3097 in this version
