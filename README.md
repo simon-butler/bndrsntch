@@ -1,19 +1,31 @@
 
 # BNDRSNTCH
 
-![BNDRSNTCH screen](branch-logo-complex-branches-glow.png)
+![BNDRSNTCH logo](/img/bndrsntch-logo.png)
 
 **BNDRSNTCH** is a fan made game attempting to finish the Spectrum ZX game Stefan is making in _Black Mirror: Bandersnatch_, except for Commodore 64 platform.
 
-## News
+So far it is a clone of what we see Stefan has made, with an additional map view.
 
-This project is at the very early stages and there's nothing yet to show.
+## Screenshots
+
+Note that these are carefully constructed to not give too much away!
+
+![BNDRSNTCH screenshot 1](/img/bndrsntch-scr-1.png)
+
+![BNDRSNTCH screenshot 2](/img/bndrsntch-scr-2.png)
+
+![BNDRSNTCH screenshot 3](/img/bndrsntch-scr-3.png)
+
+![BNDRSNTCH screenshot 4](/img/bndrsntch-scr-4.png)
+
+![BNDRSNTCH screenshot 5](/img/bndrsntch-scr-5.png)
 
 ## Code template used and thanks
 
 This project forked from [acme-assembly-vscode-template](https://github.com/Esshahn/acme-assembly-vscode-template), an excellent template for creating 6503 assembly code programs quickly and easily on any of the main platforms. I won't repeat the beautifully detailed general instructions here, check it out directly for that. Here you'll just find the minimum to understand this project.
 
-## Running
+## Running and playing the game
 
 You can run the latest build of BNDERSNTCH on any supporting emulator using the [main.prog](/build/main.prg) file. Just download it and run it on your favourite emulator.
 

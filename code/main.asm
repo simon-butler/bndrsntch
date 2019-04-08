@@ -2059,6 +2059,9 @@ sound_pax_choice_good
 ; assumptions:
 ;   none
 do_intro_scr
+  lda #CN_COL_VAL_BLACK             ; set border / bg colour to black
+  sta VIC_BORDER_COL                ; set border col
+  sta VIC_BG_COL                    ; set bg col
   lda #CN_CHAR_SPACE                ; get space character
   jsr plot_fill_char_scr            ; fill whole screen with space (clear screen)
   jsr draw_intro_scr                ; draw text for intro
@@ -4559,7 +4562,7 @@ sub_copy_mem_unrolled_page
   rts                       ; finished
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_routines   ; = $20cb in this version
+debug_label_end_of_routines   ; = $2600 in this version
 
 
 ;==========================================================
@@ -4733,7 +4736,7 @@ data_str_intro7
 !scr  "press any key to start your journey..." 
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_tables_strings   ; = $3097 in this version
+debug_label_end_of_tables_strings   ; = $3282 in this version
 
 ;==========================================================
 ; SCREEN COPY
@@ -6086,7 +6089,7 @@ data_draw_near_pax_bg
 
 
 ; this label is just here to easily see what the last address of routines is, for memory calculations
-debug_label_end_of_draw_data    ; = $7db6 in this version.
+debug_label_end_of_draw_data    ; = $7e14 in this version.
                                 ;   that's 3510 bytes, recording 10 different screen halfs mirrored on both sizes,
                                 ;   meaning we're using about 1+1/3 pages per full screen, in terms of "compression"
 
