@@ -1,6 +1,8 @@
 ;==========================================================
 ; BNDRSNTCH
 ;
+; by Simon Butler 2019
+;
 ; MAIN source file, build entry point.
 ;
 ;==========================================================
@@ -4855,6 +4857,7 @@ data_scr_map
 ; FE          far exit
 ; FE BE       far exit, back exit
 ; NE FW       near exit, far wall
+; NE FE       near exit, far exit
 
 * = $7000
 

@@ -7,6 +7,8 @@
 
 So far it is a clone of what we see Stefan has made, with an additional map view.
 
+![BNDRSNTCH logo](/img/bndrsntch-scr-all.png)
+
 ## Screenshots
 
 Note that these are carefully constructed to not give too much away!
